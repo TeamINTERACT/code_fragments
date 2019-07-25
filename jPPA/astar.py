@@ -1,0 +1,131 @@
+"""
+Source code
+https://medium.com/@nicholas.w.swift/easy-a-star-pathfinding-7e6689c7f7b2
+
+Adapted for travel on histogram by Antoniu Vadan.
+"""
+import math
+
+class Node(object):
+    """A node class for A* Pathfinding"""
+
+    def __init__(self, parent=None, position=None):
+        self.parent = parent      # tuple (northing, easting)
+        self.position = position  # tuple (northing, easting)
+
+        self.g = 0  # sum of (1-p) values of path up to node
+        self.h = 0  # heuristic = dist(current_node, end) / 2 * dist(start, end)
+        self.f = 0  # total cost of node
+
+    def __eq__(self, other):
+        return self.position == other.position
+
+
+def astar(df_histogram, start, end):
+    """
+    Returns a list of tuples as a path from the given start to the given end in the given maze
+    :param df_histogram: dataframe containing frequency of visits
+    :param start: tuple (northing, easting) where trip begins
+    :param end: tuple (northing, easting) where trip ends
+    :return:
+    """
+
+    # establish resolution
+    columns_list = list(df_histogram.columns.values)  # eastings
+    index_list = list(df_histogram.index.values)      # northings
+    res = index_list[1] - index_list[0]
+
+    # Create start and end node
+    start_node = Node(None, start)
+    end_node = Node(None, end)
+
+    dist_start_end_sqrd = ((end_node.position[0] - start_node.position[0]) ** 2) + \
+                      ((end_node.position[1] - start_node.position[1]) ** 2)
+
+    # Initialize both open and closed list
+    open_list = []
+    closed_list = []
+
+    # Add the start node
+    open_list.append(start_node)
+
+    def found(node):
+        path = []
+        current = node
+        while current is not None:
+            path.append(current.position)
+            current = current.parent
+        # return path[::-1]  # Return reversed path
+        ### CODE FOR INTERPOLATING LOCATION ALONG LINESTRING/MULTILINESTRING ###
+        path = path[::-1]
+        print(path)
+
+
+    # Loop until you find the end
+    while len(open_list) > 0:
+
+        # Get the current node
+        current_node = open_list[0]
+        current_index = 0
+        for index, item in enumerate(open_list):
+            if item.f < current_node.f:
+                current_node = item
+                current_index = index
+
+        # Pop current off open list, add to closed list
+        open_list.pop(current_index)
+        closed_list.append(current_node)
+
+        # Found the goal
+        if current_node == end_node:
+            return found(current_node)
+
+        # Generate children
+        children = []
+        for new_position in [(0, -1*res), (0, 1*res), (-1*res, 0), (1*res, 0), (-1*res, -1*res),
+                             (-1*res, 1*res), (1*res, -1*res), (1*res, 1*res)]: # Adjacent squares
+            # Get node position
+            node_position = (current_node.position[0] + new_position[0], current_node.position[1] + new_position[1])
+
+            # Make sure within range
+            if (node_position[0] > index_list[-2]) or \
+                (node_position[0] < index_list[0]) or \
+                (node_position[1] > columns_list[-2]) or \
+                (node_position[1] < columns_list[0]):
+                continue
+
+            # NOTE: if filtering for 1 entries in df_histogram, filter HERE
+            # if df_histogram.at[node_position[0], node_position[1]] == 1:
+            #     continue
+
+            # Create new node
+            new_node = Node(current_node, node_position)
+
+            # Append
+            children.append(new_node)
+
+        # Loop through children
+        for child in children:
+
+            # Child is on the closed list
+            for closed_child in closed_list:
+                if child == closed_child:
+                    continue
+            dist_child_end_sqrd = ((child.position[0] - end_node.position[0]) ** 2) + \
+                      ((child.position[1] - end_node.position[1]) ** 2)
+
+            # Create the f, g, and h values
+            child.g = df_histogram.at[child.position[0], child.position[1]] + \
+                      child.parent.g
+            # child.h = math.sqrt(dist_child_end_sqrd/dist_start_end_sqrd) * 10
+            child.h = math.sqrt(dist_child_end_sqrd) / res
+            child.f = child.g + child.h
+            # print('child.g:', child.g, '      child.h:', child.h, '      child.f:', child.f)
+
+            # Child is already in the open list
+            for open_node in open_list:
+                if child == open_node and child.g > open_node.g:
+                    continue
+
+            # Add the child to the open list
+            open_list.append(child)
