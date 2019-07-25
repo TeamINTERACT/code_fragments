@@ -12,9 +12,12 @@ import math
 import datetime
 import time
 from street_network import points_along_path
+from astar import astar
 import networkx as nx
 import sys
 import dask.dataframe as dd
+from shapely.geometry import Point, LineString, mapping
+import os
 
 
 # TODO: prototype: demonstrate retrieving jppa pixels (with timestamps) for one participant with
@@ -48,6 +51,55 @@ def city_kdtree(city_grid):
     points = list(zip(rows.ravel(), cols.ravel()))
     tree = spatial.KDTree(points)  # city KDTree
     return tree, points
+
+
+def interpolate_along_path(start, end, n, histogram):
+    """
+    Adapted from https://stackoverflow.com/a/35025274
+
+    Given 2 points, compute shortest path. Along that path, get n evenly spaced points
+    :param start: starting point (northing, easting)
+    :param end: destination (northing, easting)
+    :param n: number of evenly spaced points BETWEEN starting point and destination
+    :param histogram: probability distribution of participant location, as generated in pre_trip_detection.py
+    :return: list of (northing, easting) tuples representing n + 2 points along path
+    """
+
+    if (start, end, n) in memo:
+        return memo[(start, end, n)]
+
+    cols = list(histogram.columns.values)
+    res = cols[1] - cols[0]
+
+    t5 = time.time()
+    path = astar(histogram, start, end)
+    t6 = time.time()
+    print(str(datetime.timedelta(seconds=(t6 - t5))), '------- A*')
+    path_points = [Point(x) for x in path]
+
+    path_line = LineString(path_points)
+
+    def redistribute_vertices(geom, num_vert):
+        if geom.geom_type == 'LineString':
+            if num_vert == 0:
+                num_vert = 1
+            num_vert += 1  # so that we get <num_vert> vertices IN BETWEEN p1 and p2
+            return LineString(
+                [geom.interpolate(float(i) / num_vert, normalized=True)
+                 for i in range(num_vert + 1)])
+        else:
+            raise ValueError('unhandled geometry %s', (geom.geom_type,))
+
+    multiline_r = redistribute_vertices(path_line, n)
+    map_dict = mapping(multiline_r)  # dictionary. 'type':'LineString', 'coordinates':((.....))
+    multiline_r = list(map_dict['coordinates'])  # list of coordinate tuples unrounded
+    multiline_r = [((round(x[0] / res) * res), (round(x[1] / res) * res)) for x in multiline_r]  # (northing, easting) tuples
+
+    memo.clear()
+    memo[(start, end, n)] = multiline_r
+
+
+    return multiline_r
 
 
 # TODO: test jppa_person_person()
@@ -124,6 +176,8 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
     :param df_part_csv_path: path to participant dataframe csv file -- not indexed by timestamp
         - this dataframe is preprocessed by participant_df_preprocessing.py
     :param df_city_path: path to pickled pandas dataframe of city grid -- contains 1s (in city) and np.NaNs
+                      OR path to csv file of city histogram which will be used for pre_trip_detection
+                      - created in pre_trip_detection.py
     :param paths_csv: path to participant path dataframe as computed by trip_detection.py
     :param visits_csv: path to participant visits dataframe as computed by trip_detection.py
     :param version: version 1: assumption: people do not wander at all during their dwells
@@ -134,9 +188,11 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
     :param vmax: maximum speed of person when travelling through the city in meters/second
     :param vwalk: maximum speed of person when walking
     :param pre_trip_detection: returns dataframe with minute-wise timestamps for entire duration of study
-                        containing easting and northing interpolated (using the street network graph) for
+                        containing easting and northing interpolated (using the a* algorithm) for
                         times when it is not recorded.
                         Gaps longer than 60 minutes are not filled
+                        ***IMPORTANT***: When pre_trip_detection=True, df_city_path is the path to the dataframe
+                                        where each entry represents the cost of stepping into that cell
 
     :return: dataframe with timestamp as index and cells as column
     """
@@ -165,19 +221,23 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
 
         j = 1
         k = 1
+
+        # after how many minutes to stop computing PPA and interpolating path
+        threshold = 15
+
         # find how far a timestamp (which is not also in the participant dataframe),
         #   is from a timestamp which IS in the participant dataframe
         while not df_times.at[row.name - datetime.timedelta(minutes=j), 'cells']:  # check if set is empty
             j += 1
-            if j == 60:  # set threshold: if data points are more than an hour apart, return None
+            if j == threshold:  # set threshold: if data points are more than an hour apart, return None
                 return
 
         while not df_times.at[row.name + datetime.timedelta(minutes=k), 'cells']:
             k += 1
-            if k == 60:
+            if k == threshold:
                 return
 
-        if j + k >= 60:
+        if j + k >= threshold:
             return
 
         t1 = row.name - datetime.timedelta(minutes=j)
@@ -237,26 +297,26 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
         try:
             easting = result_paths[result_paths['end_time'] == row['start_time']]['path_end_x']
             easting = float(easting)  # step is included because now easting is a Pandas Series object
-            easting = round(easting / 250) * 250
+            easting = round(easting / res) * res
             df_times.loc[row['start_time']:row['end_time'], 'temp_easting'] = easting
         except:
             easting = list(df_times.at[row['start_time'], 'cells'])
             easting = easting[0][1]
             easting = float(easting)
-            easting = round(easting / 250) * 250
+            easting = round(easting / res) * res
             df_times.loc[row['start_time']:row['end_time'], 'temp_easting'] = easting
 
     def set_northing(row):
         try:
             northing = result_paths[result_paths['end_time'] == row['start_time']]['path_end_y']
             northing = float(northing)  # step is included because now easting is a Pandas Series object
-            northing = round(northing / 250) * 250
+            northing = round(northing / res) * res
             df_times.loc[row['start_time']:row['end_time'], 'temp_northing'] = northing
         except:
             northing = list(df_times.at[row['start_time'], 'cells'])
             northing = northing[0][0]
             northing = float(northing)
-            northing = round(northing / 250) * 250
+            northing = round(northing / res) * res
             df_times.loc[row['start_time']:row['end_time'], 'temp_northing'] = northing
 
     def combine_e_n(row):
@@ -361,6 +421,25 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
         else:
             return row['cells']
 
+    def fill_in_astar(row):
+        """
+        For each gap shorter than an hour in the participant dataframe, use A* to interpolate location
+        """
+        if not row['cells'] and row['loc_tuples_e_n'] is not None:
+            point1_data = row['loc_tuples_e_n'][0]  # tuple with location data; e.g. (northing, easting, n)
+            point2_data = row['loc_tuples_e_n'][1]
+            start = (point1_data[0], point1_data[1])
+            end = (point2_data[0], point2_data[1])
+            if start == end:
+                return {start}
+            n1 = point1_data[2]
+            n2 = point2_data[2]
+            path = interpolate_along_path(start, end, (n1 + n2 -1), df_city)
+            return {(path[n1][0], path[n1][1])}
+        else:
+            return row['cells']
+
+
     def extract_n(row):
         """Apply function after the fill_in function. This function gets easting and northing
         from cells column in separate columns as preparation for trip_detection"""
@@ -375,12 +454,32 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
             coords = list(row['cells'])[0]
             return int(coords[1])
 
-    if version not in (1, 2, 3):
-        print('There are three versions available (1, 2, 3)')
-        sys.exit()
+    def apply_fill_in(df):
+        return df.apply((lambda row: fill_in(row)), axis=1)
+
+    def apply_fill_in_astar(df):
+        return df.apply((lambda row: fill_in_astar(row)), axis=1)
+
+    versions = (1, 2, 3)
+
+    if version not in versions:
+        raise ValueError('Existing versions: ' + str(versions))
 
     df_part = pd.read_csv(df_part_csv_path, parse_dates=['utc_date'])
-    df_city = pd.read_pickle(df_city_path)
+
+    # TODO: Remove following line when NOT testing -- takes every 5th entry of participant data
+    df_part = df_part.iloc[::5, :]
+
+    try:
+        df_city = pd.read_pickle(df_city_path)
+    except:
+        df_city = pd.read_csv(df_city_path, dtype=np.float)
+        df_city = df_city.set_index('Unnamed: 0')
+        df_city.columns = df_city.columns.astype(float)
+        df_city.index = df_city.index.astype(float)
+
+
+
     cols = list(df_city.columns.values)
     res = cols[1] - cols[0]
 
@@ -419,8 +518,6 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
     print('Inserting known locations')
     df_times['cells'] = df_times.apply(f3, axis=1)
 
-    def apply_fill_in(df):
-        return df.apply((lambda row: fill_in(row)), axis=1)
 
     # if pre_trip_detection:
     #     graph_utm = nx.read_gpickle(road_graph_path)  # needed for the fill_in function
@@ -441,13 +538,16 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
     #     return df_times
 
     if pre_trip_detection:
-        graph_utm = nx.read_gpickle(road_graph_path)  # needed for the fill_in function
         print('getting location tuples')
         df_times['loc_tuples_e_n'] = df_times.apply(f2, axis=1)
-        print('filling in cells using road network')
-        # df_times['cells'] = df_times.apply(fill_in, axis=1)  # without parallelization
-        ddata = dd.from_pandas(df_times, npartitions=16)
-        df_times['cells'] = ddata.map_partitions(apply_fill_in).compute(scheduler='processes')
+        # print(df_times.iloc[0:100].to_string())
+        # print(df_times.iloc[9900:10200, :].to_string())
+        # sys.exit()
+        print('filling in cells using astar')
+
+        df_times['cells'] = df_times.apply(fill_in_astar, axis=1)  # without parallelization
+        # ddata = dd.from_pandas(df_times, npartitions=16)
+        # df_times['cells'] = ddata.map_partitions(apply_fill_in_astar).compute(scheduler='processes')
 
         # extract Easting and Northing in separate columns for trip detection
         print('separating eastings and northings')
@@ -460,7 +560,6 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
 
     result_paths = pd.read_csv(paths_csv, parse_dates=['start_time', 'end_time'])
     result_visits = pd.read_csv(visits_csv, parse_dates=['start_time', 'end_time'])
-    df_city = pd.read_pickle(df_city_path)
 
     # set up KD Tree -- will be used for finding intersection of circles
     tree, points = city_kdtree(df_city)
@@ -472,10 +571,6 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
     result_paths['path_start_y'] = result_paths['path_start_y'].apply(lambda x: round(x / res) * res)
     result_paths['path_end_x'] = result_paths['path_end_x'].apply(lambda x: round(x / res) * res)
     result_paths['path_end_y'] = result_paths['path_end_y'].apply(lambda x: round(x / res) * res)
-
-    # get resolution of grid from df_city
-    cols = list(df_city.columns.values)
-    res = cols[1] - cols[0]
 
     if version == 1:
         print('Set easting for dwell times')
@@ -520,17 +615,9 @@ def ppa_person(df_part_csv_path, df_city_path, paths_csv=None, visits_csv=None, 
 
 
 if __name__ == '__main__':
-    # part_file = '../jppa_participant_dfs/saskatoon/301802247/301802247_ethica_preprocessed_250'
-    df_saskatoon = 'city_grids/saskatoon_15_625'
-    graph = 'graphs/saskatoon_statca_road_utm_undirected'
+    # Save the last a* computation for speed improvement
+    # memo should never store more than one entry
+    memo = dict()
 
-    df = pd.read_csv('../jppa_participant_dfs/saskatoon/301802247/301802247_ethica_preprocessed_250')
-    print(df.head(200).to_string())
-
-    # t1 = time.time()
-    pre_trip = ppa_person(part_file, df_saskatoon, result_paths, result_visits, version=1)
-    # t2 = time.time()
-    # print(str(datetime.timedelta(seconds=(t2 - t1))), '------- ppa v1')
-    # pre_trip.to_csv('../jppa_participant_dfs/saskatoon/301802247/301802247_v1_ethica_250')
-
+    
 

@@ -30,6 +30,13 @@ def astar(df_histogram, start, end):
     :return:
     """
 
+    ################### debugging ###################
+    print('++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
+    print(start)
+    print(end)
+    #################################################
+
+
     # establish resolution
     columns_list = list(df_histogram.columns.values)  # eastings
     index_list = list(df_histogram.index.values)      # northings
@@ -38,9 +45,6 @@ def astar(df_histogram, start, end):
     # Create start and end node
     start_node = Node(None, start)
     end_node = Node(None, end)
-
-    dist_start_end_sqrd = ((end_node.position[0] - start_node.position[0]) ** 2) + \
-                      ((end_node.position[1] - start_node.position[1]) ** 2)
 
     # Initialize both open and closed list
     open_list = []
@@ -58,7 +62,7 @@ def astar(df_histogram, start, end):
         # return path[::-1]  # Return reversed path
         ### CODE FOR INTERPOLATING LOCATION ALONG LINESTRING/MULTILINESTRING ###
         path = path[::-1]
-        print(path)
+        return path
 
 
     # Loop until you find the end
@@ -94,7 +98,7 @@ def astar(df_histogram, start, end):
                 (node_position[1] < columns_list[0]):
                 continue
 
-            # NOTE: if filtering for 1 entries in df_histogram, filter HERE
+            # NOTE: if filtering for certain entries in df_histogram, filter HERE
             # if df_histogram.at[node_position[0], node_position[1]] == 1:
             #     continue
 
@@ -107,25 +111,49 @@ def astar(df_histogram, start, end):
         # Loop through children
         for child in children:
 
-            # Child is on the closed list
-            for closed_child in closed_list:
-                if child == closed_child:
-                    continue
-            dist_child_end_sqrd = ((child.position[0] - end_node.position[0]) ** 2) + \
-                      ((child.position[1] - end_node.position[1]) ** 2)
+            if child in closed_list:
+                continue
 
             # Create the f, g, and h values
             child.g = df_histogram.at[child.position[0], child.position[1]] + \
                       child.parent.g
-            # child.h = math.sqrt(dist_child_end_sqrd/dist_start_end_sqrd) * 10
-            child.h = math.sqrt(dist_child_end_sqrd) / res
+
+            # TODO: LOOK INTO THE MEANING OF DIAGONAL_DISTANCE BELOW
+            # use diagonal distance for heuristic
+            dx = abs(child.position[1] - end_node.position[1]) / res  # actual grid steps (1, 2, 3 ...)
+            dy = abs(child.position[0] - end_node.position[0]) / res
+            minimum = min(dx, dy)
+            maximum = max(dx, dy)
+            diagonal_steps = minimum
+            straight_steps = maximum - minimum
+            diagonal_distance = math.sqrt(2) * diagonal_steps + straight_steps
+            child.h = diagonal_distance
+
+
             child.f = child.g + child.h
             # print('child.g:', child.g, '      child.h:', child.h, '      child.f:', child.f)
 
             # Child is already in the open list
-            for open_node in open_list:
-                if child == open_node and child.g > open_node.g:
-                    continue
+            to_append = True
+            tracker = None
+            for i, open_node in enumerate(open_list):
+                if child == open_node and child.g >= open_node.g:
+                    to_append = False
+                elif child == open_node and child.g < open_node.g:
+                    tracker = i
+
+            ########## trying something ###########
+            # if the child is in the open list already and the cost found now is lower than the cost found
+            #   in open_list, add this node to the open list and remove the old node
+            if tracker is not None:
+                del open_list[tracker]
+            #######################################
 
             # Add the child to the open list
-            open_list.append(child)
+            # open_list.append(child)
+            ##################################
+            if to_append:
+                open_list.append(child)
+            ##################################
+
+
