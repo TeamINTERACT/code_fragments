@@ -6,6 +6,8 @@ import os
 import psycopg2 as psy
 from sys import argv
 import pandas as pd
+import git
+from datetime import datetime
 
 
 def get_connection_kwargs():
@@ -18,11 +20,13 @@ def get_connection_kwargs():
     }
 
 
-city_names = { 1: "victoria",
-               2: "vancouver",
-               3: "saskatoon",
-               4: "montreal",
-               5: "unknown",}
+city_names = {
+    1: "victoria",
+    2: "vancouver",
+    3: "saskatoon",
+    4: "montreal",
+    5: "unknown"
+}
 
 cities = {
     "victoria": 1,
@@ -87,3 +91,18 @@ def get_command_args(scriptname):
         print("Wave number must be a positive two-digit integer")
         exit()
     return city, int(wave)
+
+
+def get_last_commit_date():
+    """
+    Gets the date of the current repo's last commit
+    :return: the date of the last commit
+    """
+    repo = git.Repo('.')
+    tree = repo.tree()
+    date = None
+    for blob in tree:
+        commit = next(repo.iter_commits(paths=blob.path, max_count=1))
+        if date is None or date < datetime.fromtimestamp(commit.committed_date):
+            date = datetime.fromtimestamp(commit.committed_date)
+    return str(date)[0:10]

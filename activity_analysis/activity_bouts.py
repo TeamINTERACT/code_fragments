@@ -1,5 +1,3 @@
-import os
-from datetime import datetime
 from os.path import isfile, isdir
 from sys import argv
 import pandas as pd
@@ -70,16 +68,13 @@ if __name__ == "__main__":
     else:
         epoch = 'H'
 
+    ver = it.get_last_commit_date()
     if wave < 10:
-        top_fname = output_dir + '/' + city + '_0' + str(wave) + input_type \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
-        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_' + epoch + '_bouts_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
+        top_fname = output_dir + '/' + city + '_0' + str(wave) + input_type + ver + '.csv'
+        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_' + epoch + '_bouts_' + ver + '.csv'
     else:
-        top_fname = output_dir + '/' + city + '_' + str(wave) + input_type \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
-        out_fname = output_dir + '/' + city + '_' + str(wave) + '_' + epoch + '_bouts_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
+        top_fname = output_dir + '/' + city + '_' + str(wave) + input_type + ver + '.csv'
+        out_fname = output_dir + '/' + city + '_' + str(wave) + '_' + epoch + '_bouts_' + ver + '.csv'
 
     if not isfile(top_fname):
         print("Provided path for file name is not a file.")

@@ -21,8 +21,6 @@ from sys import argv
 import top_generation as tg
 import numpy as np
 from wear_time import wear_marking
-import os
-from datetime import datetime
 
 
 if __name__ == "__main__":
@@ -41,16 +39,13 @@ if __name__ == "__main__":
         time_type = "min"
         time_quant = "1"
 
+    ver = it.get_last_commit_date()
     if wave < 10:
-        top_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
-        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_top_' + time_quant + time_type + '_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
+        top_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' + ver + '.csv'
+        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_top_' + time_quant + time_type + '_' + ver + '.csv'
     else:
-        top_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
-        out_fname = output_dir + '/' + city + '_' + str(wave) + '_top_' + time_quant + time_type + '_' \
-                + str(datetime.fromtimestamp(os.stat('.git/FETCH_HEAD').st_mtime))[0:10] + '.csv'
+        top_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' + ver + '.csv'
+        out_fname = output_dir + '/' + city + '_' + str(wave) + '_top_' + time_quant + time_type + '_' + ver + '.csv'
 
     if not isfile(top_fname):
         print("Could not locate file: " + top_fname)
@@ -123,6 +118,8 @@ if __name__ == "__main__":
             'summary_count': np.sum,
             'age': 'first',
             'gender': 'first',
+            'income': 'first',
+            'education': 'first',
             'city_id': 'first',
             'wave_id': 'first',
         }).dropna(subset=['interact_id'])
@@ -135,10 +132,10 @@ if __name__ == "__main__":
         minute_data.loc[minute_data.summary_count < vigorous_thresh, 'activity_levels'] = "moderate"
         minute_data.loc[minute_data.summary_count < moderate_thresh, 'activity_levels'] = "light"
         minute_data.loc[minute_data.summary_count < light_thresh, 'activity_levels'] = "sedentary"
-        minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "speed", "alt",
-                                                 "northing", "easting", "zone", "in_city",
-                                                 "x_count", "y_count", "z_count", "summary_count",
-                                                 "wearing", "activity_levels", "age", "gender", "city_id", "wave_id"]]
+        minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "speed", "alt", "northing",
+                                                 "easting", "zone", "in_city", "x_count", "y_count", "z_count",
+                                                 "summary_count", "wearing", "activity_levels", "age", "gender",
+                                                 "income", "education", "city_id", "wave_id"]]
         minute_data[["interact_id", "in_city", "x_count", "y_count", "z_count", "wearing", "age", "wave_id"]] = \
             minute_data[["interact_id", "in_city", "x_count", "y_count", "z_count", "wearing", "age", "wave_id"]].astype(int)
         minute_data = minute_data.set_index(['interact_id', 'utcdate'])
