@@ -6,6 +6,7 @@ Adapted for travel on histogram by Antoniu Vadan.
 """
 import math
 
+
 class Node(object):
     """A node class for A* Pathfinding"""
 
@@ -67,7 +68,6 @@ def astar(df_histogram, start, end):
 
     # Loop until you find the end
     while len(open_list) > 0:
-
         # Get the current node
         current_node = open_list[0]
         current_index = 0
@@ -128,7 +128,6 @@ def astar(df_histogram, start, end):
             straight_steps = maximum - minimum
             diagonal_distance = math.sqrt(2) * diagonal_steps + straight_steps
             child.h = diagonal_distance
-
 
             child.f = child.g + child.h
             # print('child.g:', child.g, '      child.h:', child.h, '      child.f:', child.f)
