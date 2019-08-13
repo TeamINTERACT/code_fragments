@@ -1,0 +1,314 @@
+#!/usr/bin/env python
+"""
+   Create a data summary report for a specific participant. 
+
+   Caveat: the library used to render the GPS traces (staticmap) doesn't
+   take GIS regions into account, so maps are being drawn using
+   straight-line segments rather than great-circle arcs. 
+   Given the very short segments involved though, this should not be an 
+   issue for participant reports.
+
+   Other mapping libraries tried were based on node.js, and required 
+   running a browser window and taking a live screen-shot in order to
+   produce a static image file for the PDF report. This dramatically
+   increased the time needed to produce each report and was extremely
+   inefficient to run on a headless server session.
+
+   Usage: 
+      participant_report [options] (-i ID | -c city -w wave | -g sec_top -a min_top)
+      participant_report -h | --help
+      participant_report -V | --version
+
+   Options:
+      -d          # Allow db queries if csv cache not present
+      -g FNM      # Take GPS data from csv file in FNM
+      -a FNM      # Take accelerometer data from csv file in FNM
+      -A DSTR     # Show only activity after DSTR (default: today - 30 days)
+      -B DSTR     # Show only activity before DSTR (default: today)
+      -i ID       # Create reports for specific participant ID
+      -w N,N...   # Limit reports to participants in wave #N
+      -c N,N...   # Limit reports to participants in city #N
+      -O OUTDIR   # Put all output reports in directory OUTDIR
+      -h          # Print this help information
+      -v          # Display verbose output
+      -V          # Display version information
+
+   e.g.: participant_report -A 2017-06-10 -B 2017-06-20 -i 101981972
+         participant_report -A 2017-05-28 -B 2017-06-10 -i 101393503
+
+
+"""
+
+# Roadmap:
+#     X Render dummy GPS track from external CSV into image file
+#     X Get background map tile position based on centroid of GPS data
+#     X Get background map tile dimensions based on bounding box of GPS data
+#     X Render dummy accel graphs from external CSV into image file
+#     X Output report into PDF format.
+#     X Merge GPS and accel graphs into PDF document
+#     X Implement -i ID to filter for specific participant
+#     X Replace CSV inputs with active SQL queries
+#     X Get -A and -B options working
+#     X Produce multiple reports, guided by -i option
+#     X Produce reports for SD data as well as Ethica
+#     X Correct UTC time to local time
+#     X Broaden selection filter using -c and -w options
+
+import pandas as pd
+import psycopg2 as psy
+from docopt import docopt
+import interact_tools as it
+import matplotlib.pyplot as plt
+import matplotlib.backends.backend_pdf
+import seaborn as sns
+from staticmap import StaticMap
+from heatmappy import Heatmapper
+from os.path import isfile
+
+
+def mention(outstr):
+    "A simple verbosity function. Only print if -v given on command line."
+    if args['-v']:
+        print(outstr)
+
+
+def convert_local_timestamp_to_utc(timestampstr, tzstr):
+    "Takes a timestamp and tz as strings, returns UTC of that stamp."
+    stamp = pd.Timestamp(timestampstr)
+    stamp_local = stamp.tz_localize(tzstr)
+    stamp_utc = stamp_local.tz_convert('UTC')
+    return stamp_utc
+
+
+def load_top_data_frame(idstr, afterstr, beforestr):
+    tablename = it.get_city_from_id(idstr) + "_top_sec"
+    querystr_gps = """
+               SELECT utc_date, lat, lon
+               FROM %s 
+               WHERE utc_date >= '%s' 
+               AND utc_date <= '%s'
+               AND inter_id = %s
+               AND in_city = 1;
+               """ % (tablename, afterstr, beforestr, idstr)
+    tablename = it.get_city_from_id(idstr) + "_top_min"
+    querystr_act = """
+               SELECT utc_date, summary_count
+               FROM %s 
+               WHERE utc_date >= '%s' 
+               AND utc_date <= '%s'
+               AND inter_id = %s;
+               """ % (tablename, afterstr, beforestr, idstr)
+    kwargs = it.get_connection_kwargs()
+    with psy.connect(**kwargs) as conn:
+        top_gps = pd.read_sql(querystr_gps, conn)
+        top_gps.set_index(['utc_date'], inplace=True)
+        print(top_gps.head())
+        top_act = pd.read_sql(querystr_act, conn)
+        top_act.set_index(['utc_date'], inplace=True)
+        print(top_act.head())
+        return top_act, top_gps
+
+
+def render_GPS_map_top(df, date=None, outfname=''):
+    "Render a GPS track map of the given points into given filename"
+
+    mention("Generating GPS map for date %s..." % date)
+    print(df.head())
+    # get the base map tile
+    # the staticmap module will compute an appropriate
+    # map region and zoom level
+    map_w = 2400
+    map_h = 1800
+    m = StaticMap(map_w, map_h)
+
+    # create subset of GPS data for just the given date
+    if date is None:
+        day_df = df
+    else:
+        day_df = df[date]
+    mention("%d records avail for date: %s" % (day_df.size, date))
+
+    center_x = day_df.lon.mean()
+    center_y = day_df.lat.mean()
+    x_dist = 0.1
+    y_dist = 0.05
+    hpoints = list(zip((day_df.lon - center_x + x_dist) * map_w / (2 * x_dist),
+                       map_h - (day_df.lat - center_y + y_dist) * map_h / (2 * y_dist)))
+    mention("Converted df to list of %d points" % len(hpoints))
+
+    # render the image
+    image = m.render(zoom=14, center=[center_x, center_y])
+    hmapper = Heatmapper()
+    image = hmapper.heatmap_on_img(hpoints, image)
+
+    # and save it to disk, if a filename given
+    if outfname:
+        image.save(outfname)
+        mention("Report saved to '%s'" % outfname)
+
+    mention("GPS map image generated")
+
+    return image
+
+
+def generate_top_report(afterstr, beforestr, top_act, top_gps):
+    pdf = matplotlib.backends.backend_pdf.PdfPages(outfname)
+    # resample to get average accelerometer values for each minute (1T) or second (1S)
+    mention("Resampling acceleration data")
+
+    activity_levels = pd.DataFrame(columns=['date', 'sedentary', 'light', 'moderate', 'vigorous'])
+    for datestr in [str(x)[:10] for x in pd.date_range(afterstr, beforestr)]:
+        if not datestr in top_act.index:
+            # print("Date %s not in accel data" % datestr)
+            continue
+        day_act = top_act[datestr]
+        if day_act.empty or len(day_act.index) < 50:
+            # print("Date %s not in gps data" % datestr)
+            continue
+        date = datestr[-5:]
+        sedentary = day_act[day_act.summary_count < 100].shape[0]
+        light = day_act[(day_act.summary_count >= 100) & (day_act.summary_count < 2020)].shape[0]
+        moderate = day_act[(day_act.summary_count >= 2020) & (day_act.summary_count < 5999)].shape[0]
+        vigorous = day_act[day_act.summary_count >= 5999].shape[0]
+        activity_levels = activity_levels.append(pd.Series([date, sedentary, light, moderate, vigorous],
+                                                           index=['date', 'sedentary', 'light', 'moderate',
+                                                                  'vigorous']),
+                                                 ignore_index=True)
+
+    activity_levels['recommended'] = 22
+    activity_levels['totals'] = activity_levels['sedentary'] + activity_levels['light'] + activity_levels['moderate'] \
+                                + activity_levels['vigorous']
+
+    # generate the GPS image
+    gps_img = render_GPS_map_top(top_gps)
+
+    # set up the overall figure and sub-axes
+    fig = plt.figure(figsize=(8, 10), dpi=300)
+    fig.suptitle('SenseDoc Activity Report')
+    fig.text(0.5, 0.94, '(for %s to %s)' % (str(afterstr)[:10], str(beforestr)[:10]), ha='center')
+    axes = fig.subplots(2, 1, gridspec_kw={'height_ratios': [5, 1]})
+
+    # plot the actual graphs
+    mention("Plotting the map inside the figure.")
+    axes[0].imshow(gps_img, aspect='auto', interpolation='nearest', shape=(2400, 1800))
+
+    mention("Plotting the activity graph.")
+    print(activity_levels)
+    axes[1].plot(activity_levels.date, activity_levels.recommended, color='k')
+    axes[1].plot(activity_levels.date, activity_levels.light, color='b')
+    axes[1].plot(activity_levels.date, activity_levels.moderate, color='g')
+    axes[1].plot(activity_levels.date, activity_levels.vigorous, color='r')
+    axes[1].legend(loc='upper center', bbox_to_anchor=(0.5, -0.22), ncol=4)
+
+    # turn off grid overlay for GPS map
+    mention("Tweaking the graph display.")
+    axes[0].set_xticks([])
+    axes[0].set_yticks([])
+
+    # set graph labels
+    axes[0].set_title("GPS Heatmap")
+    axes[1].set_title("Physical Activity Time")
+    # the map also needs no tick labels
+    axes[0].xaxis.set_tick_params(labelbottom=False)
+    axes[0].yaxis.set_tick_params(labelbottom=False)
+    axes[1].set_ylabel("Minutes", rotation=90, fontsize=8, fontweight='bold')
+    pdf.savefig(fig)
+
+    pdf.close()
+    print("File saved to '%s'." % outfname)
+
+
+if __name__ == "__main__":
+    # process command line args
+    args = docopt(__doc__, version='version 0.0.1')
+    mention(args)
+
+    # now assemble the graphs into a figure
+    sns.set()  # turn on seaborn for nicer styling
+
+    img = None
+    df = None
+    kwargs = it.get_connection_kwargs()
+
+    afterstr = '2015-01-01 00:00:00-00:00'
+    beforestr = '2100-01-01 00:00:00-00:00'
+    tzstr = 'Canada/Pacific'
+    if args['-A']:
+        dstr = args['-A']
+        afterstr = convert_local_timestamp_to_utc(dstr, tzstr).tz_convert('Canada/Pacific')
+        mention("Date '%s' maps to UTC '%s'" % (dstr, afterstr))
+    if args['-B']:
+        dstr = args['-B']
+        beforestr = convert_local_timestamp_to_utc(dstr, tzstr).tz_convert('Canada/Pacific')
+        mention("Date '%s' maps to UTC '%s'" % (dstr, beforestr))
+
+    if args['-i']:
+        idstr = args['-i']
+        outfname = "%s.pdf" % idstr
+        top_act, top_gps = load_top_data_frame(int(idstr), afterstr, beforestr)
+        firstdate = top_act.reset_index().utc_date.min()
+        lastdate = top_act.reset_index().utc_date.max()
+        generate_top_report(firstdate, lastdate, top_act.tz_convert(tzstr), top_gps.tz_convert(tzstr))
+
+    elif args['-c'] and args['-w']:
+        tablename = args['-c'] + "_top_sec"
+        id_range_low = it.cities[args['-c']] * 100000000 + int(args['-w']) * 1000000
+        querystr = """
+               SELECT DISTINCT inter_id
+               FROM %s 
+               WHERE inter_id >= '%s' 
+               AND inter_id <= '%s';
+               """ % (tablename, id_range_low, id_range_low + 999999)
+        connection = psy.connect(**kwargs)
+        cursor = connection.cursor()
+        ids = pd.read_sql(querystr, connection)['inter_id'].to_list()
+        for idstr in ids:
+            outfname = "%s.pdf" % idstr
+            top_act, top_gps = load_top_data_frame(idstr, afterstr, beforestr)
+            firstdate = top_act.reset_index().utc_date.min()
+            lastdate = top_act.reset_index().utc_date.max()
+            generate_top_report(firstdate, lastdate, top_act.tz_convert(tzstr), top_gps.tz_convert(tzstr))
+
+        cursor.close()
+        connection.close()
+
+    elif args['-g'] and args['-a']:
+        if not isfile(args['-g']):
+            print("File " + args['-g'] + " does not exist.")
+            exit(1)
+        if not isfile(args['-a']):
+            print("File " + args['-a'] + " does not exist.")
+            exit(1)
+
+        chunk_size = 10 ** 6
+        processed = []
+
+        data_chunks = pd.read_csv(args['-a'], chunksize=chunk_size)
+
+        for chunk in data_chunks:
+            processed = processed + chunk['inter_id'].drop_duplicates().to_list()
+        processed = list(set(processed))
+
+        for p in processed:
+            outfname = "%s.pdf" % p
+            data_chunks = pd.read_csv(args['-g'], chunksize=chunk_size)
+            top_gps = pd.DataFrame()
+            top_act = pd.DataFrame()
+            for chunk in data_chunks:
+                if top_gps.empty:
+                    top_gps = chunk.loc[chunk['inter_id'] == p]
+                else:
+                    top_gps = top_gps.append(chunk.loc[chunk['inter_id'] == p])
+            data_chunks = pd.read_csv(args['-a'], chunksize=chunk_size)
+            for chunk in data_chunks:
+                if top_act.empty:
+                    top_act = chunk.loc[chunk['inter_id'] == p]
+                else:
+                    top_act = top_gps.append(chunk.loc[chunk['inter_id'] == p])
+            firstdate = top_act.reset_index().utc_date.min()
+            lastdate = top_act.reset_index().utc_date.max()
+            top_gps['utc_date'] = pd.to_datetime(top_gps['utc_date'])
+            top_gps = top_gps.set_index(['utc_date']).dropna(subset=['lat', 'lon'])
+            top_act['utc_date'] = pd.to_datetime(top_act['utc_date'])
+            top_act = top_act.set_index(['utc_date'])
+            generate_top_report(firstdate, lastdate, top_act.tz_convert(tzstr), top_gps.tz_convert(tzstr))
