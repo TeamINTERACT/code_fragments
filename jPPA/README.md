@@ -29,6 +29,7 @@ Workflow -- after completing task 1!
 - Use get_stable_trip_dwells.py to extract trips and dwells of all participants
 - run_all_PPA.py can be used to compute PPA and path interpolation of participant data in a parallelized manner.
 - Process all bus data with bus_df from bus_df_extraction.py.
+	- Note: if there are two or more locations (of bus stops) associated with any given minute, the average of the location is used.
 - Use bus_work.py to fill in gaps in bus GPS data in a parallelized manner.
 - (not tested on more than one trip at a time) Run jppa_per_trip from jppa_analysis.py to get probability of a participant being on a bus during a trip.
 	- returns a one row dataframe for each participant's trip
