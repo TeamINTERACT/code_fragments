@@ -1,5 +1,6 @@
 """
-Author: Antoniu Vadan
+Author: Antoniu Vadan, summer 2019
+Description: Process all participant data according to the steps defined in pre_processing()
 """
 
 
@@ -114,11 +115,11 @@ def pre_processing(part_df, city_df, data='ethica', snap=False, graph_path=None)
 
 
 if __name__ == '__main__':
-    participant_data = '../jppa_participant_dfs/saskatoon/301223102/301223102_ethica_raw'
-    city_df = 'city_grids/saskatoon_df_250'
-    city_graph = 'graphs/saskatoon_statca_road_utm_undirected'
+    # participant_data = '../jppa_participant_dfs/saskatoon/301223102/301223102_ethica_raw'
+    # city_df = 'city_grids/saskatoon_df_250'
+    # city_graph = 'graphs/saskatoon_statca_road_utm_undirected'
 
-    result = pre_processing(participant_data, city_df, 'ethica', snap=True, graph_path=city_graph)
-    result.to_csv('../jppa_participant_dfs/saskatoon/301223102/301223102_ethica_preprocessed_250_snapped')
+    # result = pre_processing(participant_data, city_df, 'ethica', snap=True, graph_path=city_graph)
+    # result.to_csv('../jppa_participant_dfs/saskatoon/301223102/301223102_ethica_preprocessed_250_snapped')
 
 

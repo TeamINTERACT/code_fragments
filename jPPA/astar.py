@@ -2,7 +2,7 @@
 Source code
 https://medium.com/@nicholas.w.swift/easy-a-star-pathfinding-7e6689c7f7b2
 
-Adapted for travel on histogram by Antoniu Vadan.
+Adapted for travel on histogram by Antoniu Vadan in the summer of 2019.
 """
 import math
 
@@ -31,7 +31,7 @@ def astar(df_histogram, start, end):
     :return:
     """
 
-    ################### debugging ###################
+    ###################           ###################
     print('++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
     print(start)
     print(end)

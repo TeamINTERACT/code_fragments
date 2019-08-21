@@ -1,10 +1,12 @@
 """
-Author: Antoniu Vadan
-Description: Functions to compute Potential Path Area (PPA) and joint Potential Path Area (jPPA)
+Author: Antoniu Vadan, summer 2019
+Description: Functions to compute Potential Path Area (PPA). Written for the StABLE version of trip detection.
 """
 
 import osmnx as ox
+import networkx as nx
 import matplotlib.pyplot as plt
+import sys
 
 import pandas as pd
 import numpy as np
@@ -14,24 +16,8 @@ import datetime
 import time
 from street_network import points_along_path
 from astar import astar
-import networkx as nx
-import sys
-import dask.dataframe as dd
 from shapely.geometry import Point, LineString, mapping
 import os
-from threading import Lock
-
-"""
-Description:
-    - in this version of jPPA, we will compute cross-sectional PPA pixels for every minute in which
-        we lack participant data
-    - the plan is to use ArcGIS/arcpy to interpolate
-        location of buses between stops accurately
-"""
-
-
-# df_bus = pd.read_pickle('bus_saskatoon_6jan_27april/df_main2')
-# df_participant = pd.read_pickle('../jppa_participant_dfs/saskatoon_ethica_gps_250m_1min')
 
 
 def city_kdtree(city_grid):
@@ -93,67 +79,8 @@ def interpolate_along_path(start, end, n, histogram):
     return multiline_r
 
 
-def jppa_person_person(df_part1, df_part2):
-    """
-    Compute dataframe indexed by timestamp and with three columns
-    :param part1: PPA dataframe of participant with interact id 1 -- contains utc_date as index and one 'cells' column
-    :param part2: PPA dataframe of participant with interact id 2 -- contains utc_date as index and one 'cells' column
-    :return: dataframe indexed by timestamp and with three columns
-             Two columns are interact_id_1 and interact_id_2
-             One column is "cells" representing intersecting cells at a given timestamp
-    """
-
-    # Find max starting time and min ending time
-    part1_start = df_part1.index.values[0]  # starting datetime of first period
-    part1_end = df_part1.index.values[-1]   # ending datetime of first period
-    part2_start = df_part2.index.values[0]  # starting datetime of second period
-    part2_end = df_part2.index.values[-1]   # ending datetime of second period
-
-    # convert all to pandas datetimes
-    part1_start = pd.to_datetime(str(part1_start))
-    part2_start = pd.to_datetime(str(part2_start))
-    part1_end = pd.to_datetime(str(part1_end))
-    part2_end = pd.to_datetime(str(part2_end))
-
-    df_start_end = pd.DataFrame([[part1_start, 'start'], [part2_start, 'start'],
-                                [part1_end, 'end'], [part2_end, 'end']],
-                                columns=['utc_date', 'start/end'])
-
-    # from df_start_end, create dataframe with start and end dates labelled as max and min
-    # we want to create a time range from the latest starting period to earliest ending period
-    #   to evaluate overlap
-    df_start_end = df_start_end.groupby('start/end')['utc_date'].agg({'earliest':'min', 'latest':'max'})
-
-    starting = df_start_end.at['start', 'latest']
-    ending = df_start_end.at['end', 'earliest']
-
-    time_range = pd.date_range(starting, ending + pd.Timedelta(days=1),  # this line corrects the range --
-                                        freq='T')                   # otherwise it does not include last day
-
-    # trim ends of time_range -- e.g. it starts at time 00:00:00 while participant data starts at 04:02:00
-    for i, t in  enumerate(time_range):
-        if t == starting:
-            time_range = time_range[i:]
-            break
-
-    for i, t in reversed(list(enumerate(time_range))):
-        if t == ending:
-            time_range = time_range[0:i+1]
-            break
-
-    df_jppa = pd.DataFrame(time_range, columns=['utc_date'])
-    df_jppa.set_index('utc_date', inplace=True)
-    df_jppa['cells'] = np.NaN
-
-    def f(row):
-        return df_part1.at[row.name, 'cells'].intersection(df_part2.at[row.name, 'cells'])
-
-    df_jppa['cells'] = df_jppa.apply(f, axis=1)
-    return df_jppa
-
-
-def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1, road_graph_path=None,
-               vmax=2, vwalk=2, pre_trip_detection=False):
+def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, main_dir=None, version=1, road_graph_path=None,
+               vmax=2, vwalk=2, astar_threshold=5000, pre_trip_detection=False):
     """
     Compute dataframe -- timestamp is every minute of period with participant data as index -- with
         one column 'cells' containing either 1 set of easting and northing (if a recording was taken
@@ -161,21 +88,23 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
     Dataframe represents a person's PPA
     Different versions of PPA are documented below
     May also interpolate location when pre_trip_detection=True. In that case, only df_part_csv_path, df_city_path
-    and road_graph_path also need to be provided.
+    and road_graph_path also need to be provided. -- meant to be used for kernel-based trip detection
 
     :param df_part_csv_path: path to participant dataframe csv file -- not indexed by timestamp
         - this dataframe is preprocessed by participant_df_preprocessing.py
     :param df_city_path: path to pickled pandas dataframe of city grid -- contains 1s (in city) and np.NaNs
-                      OR path to csv file of city histogram which will be used for pre_trip_detection
+                      ----- OR ----- path to csv file of city histogram which will be used for pre_trip_detection
                       - created in pre_trip_detection.py
+    :param main_dir: path to directory where trips will be saved if version == 'per_trip'
     :param trips_dwells_path: path to participant visits AND dwells dataframe as computed by spatial_metrics.py
-    :param version: version 1: assumption: people do not wander at all during their dwells
-                    version 2: assumption: people wander in between the recordings at walking speed
-                    version 3: assumption: people can wander from the beginning of the dwell until the end
-                                            at walking speed (ignoring the measurements in between)
+    :param version: 1: assumption: people do not wander at all during their dwells
+                    2: assumption: people wander in between the recordings at walking speed
+                    'per_trip': computes PPA only for trips -- ignores dwells
     :param road_graph_path: path to gpickled road network of city
     :param vmax: maximum speed of person when travelling through the city in meters/second
     :param vwalk: maximum speed of person when walking
+    :param astar_threshold: do not compute path interpolation between any two points that are more than astar_threshold
+                            meters apart
     :param pre_trip_detection: returns dataframe with minute-wise timestamps for entire duration of study
                         containing easting and northing interpolated (using the a* algorithm) for
                         times when it is not recorded.
@@ -197,7 +126,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     def f1_inner(row, part_times_inner, dummy):
         """
-        Function to apply on df_times to create 'in_participant' column
+        Similar to f1. However, it is meant to be called within another function (e.g. process_trips)
         """
         if row['utc_date'] in part_times_inner:
             return True
@@ -207,7 +136,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
     def f2(row):
         """
         Function to apply on df_times to create 'location_tuples_e_n' column
-        If a timestamp is contained in the participant dataframe, location_tuples_e_n is a tuple
+        If the location at a timestamp is contained in the participant dataframe, location_tuples_e_n is a tuple
             of the easting and northing of the location of the participant at that time
         Otherwise, it contains a tuple of tuples -- first tuple contains the easting and northing of last
             recorded location, along with how many minutes away it was recorded
@@ -220,11 +149,12 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         j = 1
         k = 1
 
-        # after how many minutes to stop computing PPA and interpolating path
+        # The following parameter indicates the size (in minutes) of the largest gap in time between two measurements
+        # for which to not compute PPA or interpolate path anymore
         threshold = 15
 
-        # find how far a timestamp (which is not also in the participant dataframe),
-        #   is from a timestamp which IS in the participant dataframe
+        # Find how far a timestamp (which is not also in the participant dataframe),
+        # is from a timestamp which IS in the participant dataframe
         while not df_times.at[row.name - datetime.timedelta(minutes=j), 'cells']:  # check if set is empty
             j += 1
             if j == threshold:  # set threshold: if data points are more than an hour apart, return None
@@ -249,12 +179,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     def f2_inner(row, times, dummy):
         """
-        Function to apply on df_times to create 'location_tuples_e_n' column
-        If a timestamp is contained in the participant dataframe, location_tuples_e_n is a tuple
-            of the easting and northing of the location of the participant at that time
-        Otherwise, it contains a tuple of tuples -- first tuple contains the easting and northing of last
-            recorded location, along with how many minutes away it was recorded
-            Second tuple contains the same data for the second point
+        Similar to f2. However, it is meant to be called within another function (e.g. process_trips)
         """
 
         if row['cells']:  # check if set is not empty
@@ -319,7 +244,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     def f3(row):
         """
-        Insert known location of participant in df_times
+        Insert known location of participant in the new dataframe df_times
         """
         if row['in_participant']:
             result = set()
@@ -330,18 +255,12 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
             result = set()
             return result
 
-    def set_easting(row):  # exception handles the case in which the first cells in a participant dataframe
-                           #    represent a dwell
-                           # reason: querying result_paths[result_paths['end_time'] == row['start_time']]
-                           #    results in an error because there is no such entry if the first dwell is at the
-                           #    beginning of the dataframe
-        # try:
-        #     easting = result_paths[result_paths['end_time'] == row['start_time']]['path_end_x']
-        #     easting = float(easting)  # step is included because now easting is a Pandas Series object
-        #     easting = round(easting / res) * res
-        #     df_times.loc[row['start_time']:row['end_time'], 'temp_easting'] = easting
-        # except:
 
+    def set_easting(row):
+        """
+        Creates a separate 'temp_easting' column. This function is used to separately add the easting and northing
+        components of dwell locations -- written with kernel-based trip detection data in mind
+        """
         easting = list(df_times.at[row['start_time'], 'cells'])
         easting = easting[0][1]
         easting = float(easting)
@@ -349,12 +268,10 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         df_times.loc[row['start_time']:row['end_time'], 'temp_easting'] = easting
 
     def set_northing(row):
-        # try:
-        #     northing = result_paths[result_paths['end_time'] == row['start_time']]['path_end_y']
-        #     northing = float(northing)  # step is included because now easting is a Pandas Series object
-        #     northing = round(northing / res) * res
-        #     df_times.loc[row['start_time']:row['end_time'], 'temp_northing'] = northing
-        # except:
+        """
+        Creates a separate 'temp_northing' column. This function is used to separately add the easting and northing
+        components of dwell locations -- written with kernel-based trip detection data in mind
+        """
         northing = list(df_times.at[row['start_time'], 'cells'])
         northing = northing[0][0]
         northing = float(northing)
@@ -362,6 +279,9 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         df_times.loc[row['start_time']:row['end_time'], 'temp_northing'] = northing
 
     def combine_e_n(row):
+        """
+        Adds temp_easting and temp_northing together into cells
+        """
         if not math.isnan(row['temp_easting']):
             row['cells'].clear()
             row['cells'].add((row['temp_northing'], row['temp_easting']))
@@ -372,7 +292,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     def f4(row):
         """
-        Compute circle intersections
+        Compute circle intersections between consecutive time steps
         """
         if not row['cells'] and row['loc_tuples_e_n'] is not None:
             point1 = row['loc_tuples_e_n'][0]  # tuple of tuples with location data
@@ -394,7 +314,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     def f4_walking(row):
         """
-        Compute circle intersections with walking speed
+        Compute circle intersections between consecutive time steps at walking speed
         """
         if not row['cells'] and row['loc_tuples_e_n'] is not None:
             point1 = row['loc_tuples_e_n'][0]  # tuple with location data
@@ -448,25 +368,6 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         df_times.loc[start:end, 'cells'] = \
             df_times.loc[start:end, columns].apply(f4_walking, axis=1)
 
-    def fill_in(row):
-        """
-        For each gap in the participant dataframe, use street_network.py function to interpolate
-        """
-        if not row['cells'] and row['loc_tuples_e_n'] is not None:
-            point1_data = row['loc_tuples_e_n'][0]  # tuple with location data; e.g. (northing, easting, n)
-            point2_data = row['loc_tuples_e_n'][1]
-            start = (point1_data[0], point1_data[1])
-            end = (point2_data[0], point2_data[1])
-            if start == end:
-                return {start}
-            n1 = point1_data[2]
-            n2 = point2_data[2]
-            path = points_along_path(start, end, graph_utm, (n1 + n2 - 1))
-            return {(int(round(path[n1][1]) / res) * res, int(round(path[n1][0]) / res) * res)}  # reverse easting and
-            # return {(path[n1][1], path[n1][0])}
-        else:
-            return row['cells']
-
     def fill_in_astar(row, memo_dict, dummy):
         """
         For each gap shorter than an hour in the participant dataframe, use A* to interpolate location
@@ -478,6 +379,9 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
             end = (point2_data[0], point2_data[1])
             if start == end:
                 return {start}
+            dist = math.sqrt((start[0] - end[0])**2 + (start[1] - end[1])**2)
+            if dist > astar_threshold:
+                return row['cells']
             n1 = point1_data[2]
             n2 = point2_data[2]
 
@@ -507,14 +411,11 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
             coords = list(row['cells'])[0]
             return int(coords[1])
 
-    def apply_fill_in(df):
-        return df.apply((lambda row: fill_in(row)), axis=1)
-
-    def apply_fill_in_astar(df):
-        return df.apply((lambda row: fill_in_astar(row)), axis=1)
-
     def get_df_times(df):
-        # time range from the beginning of
+        """
+        Returns dataframe with 'utc_date' column. Timestamps range from beginning of participant data to end, on a
+            minute by minute basis. Also returns a set containing this time range.
+        """
         time_range = pd.date_range(df.loc[df.index[0], 'utc_date'].strftime('%Y-%m-%d'),
                                    df.loc[df.index[-1], 'utc_date']
                                    + pd.Timedelta(days=1),  # this line corrects the range -- otherwise it does not
@@ -540,17 +441,12 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         return times, part_times_set
 
 
-    versions = (1, 2, 3, 'per_trip')
+    versions = (1, 2, 'per_trip')
 
     if version not in versions:
         raise ValueError('Existing versions: ' + str(versions))
 
     df_part = pd.read_csv(df_part_csv_path, parse_dates=['utc_date'])
-
-    # TODO: **********++++++++++ Remove following line when NOT testing -- takes every 5th entry of participant data ++++++++++**********
-    # df_part = df_part.iloc[0:68, :]
-    # print(df_part.to_string())
-    # sys.exit()
 
     try:
         df_city = pd.read_pickle(df_city_path)
@@ -566,24 +462,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
     pd.to_numeric(df_part['easting'])
     pd.to_numeric(df_part['northing'])
 
-    # if pre_trip_detection:
-    #     graph_utm = nx.read_gpickle(road_graph_path)  # needed for the fill_in function
-    #     print('getting location tuples')
-    #     df_times['loc_tuples_e_n'] = df_times.apply(f2, axis=1)
-    #     print('filling in cells using road network')
-    #     # df_times['cells'] = df_times.apply(fill_in, axis=1)  # without parallelization
-    #     ddata = dd.from_pandas(df_times, npartitions=16)
-    #     df_times['cells'] = ddata.map_partitions(apply_fill_in).compute(scheduler='processes')
-    #
-    #     # extract Easting and Northing in separate columns for trip detection
-    #     print('separating eastings and northings')
-    #     df_times['utm_n'] = df_times.apply(extract_n, axis=1)
-    #     df_times['utm_e'] = df_times.apply(extract_e, axis=1)
-    #     print('dropping NaNs')
-    #     # remove times with no data for location (times when location is missing for longer than 60 mins)
-    #     df_times = df_times.dropna()
-    #     return df_times
-
+    # This version fills in gaps in data in order to prepare for the kernel-based trip detection algorithm
     if pre_trip_detection:
         df_times, part_times = get_df_times(df_part)
 
@@ -592,17 +471,10 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         df_times.set_index('utc_date', inplace=True)
         print('Inserting known locations')
         df_times['cells'] = df_times.apply(f3, axis=1)
-
         print('getting location tuples')
         df_times['loc_tuples_e_n'] = df_times.apply(f2, axis=1)
-        # print(df_times.iloc[0:100].to_string())
-        # print(df_times.iloc[9900:10200, :].to_string())
-        # sys.exit()
         print('filling in cells using astar')
-
         df_times['cells'] = df_times.apply(fill_in_astar, axis=1)  # without parallelization
-        # ddata = dd.from_pandas(df_times, npartitions=16)
-        # df_times['cells'] = ddata.map_partitions(apply_fill_in_astar).compute(scheduler='processes')
 
         # extract Easting and Northing in separate columns for trip detection
         print('separating eastings and northings')
@@ -615,27 +487,18 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
 
     trips_dwells = pd.read_csv(trips_dwells_path, parse_dates=['start_time', 'end_time'])
     result_visits = trips_dwells[trips_dwells['trip_length'] == 1]
-    result_visits= result_visits[result_visits['duration'] != 1]
+    result_visits = result_visits[result_visits['duration'] != 1]
     result_trips = trips_dwells[trips_dwells['trip_length'] > 1]
-    # print(trips_dwells.iloc[0:20, :].to_string())
-    # print(result_visits.iloc[0:20, :].to_string())
-    # print(result_trips.iloc[0:3, :].to_string())
-    # result_trips = result_trips.iloc[0:3, :]
-
-    # sys.exit()
 
     def process_trips(row):
+        """
+        Get PPA and interpolate path along a single participant trip. Save result as a csv file -- path is hardcoded
+        """
         trip_start_time = row['start_time']
         trip_end_time = row['end_time']
         difference = (trip_end_time - trip_start_time) / np.timedelta64(1, 'm')
         if difference < 10:
             return
-
-        lock = Lock()
-
-        lock.acquire()  # will block if lock is already held
-        print("something")
-        lock.release()
 
         t1 = time.time()
         trip = df_part.loc[(df_part['utc_date'] >= row['start_time']) & (df_part['utc_date'] <= row['end_time'])]
@@ -664,7 +527,6 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         time_day = trip.at[0, 'utc_date'].time().strftime('%H:%M:%S').replace(':', '_')
 
         interact_id = str(trip.at[0, 'interact_id'])
-        main_dir = '../jppa_participant_dfs/victoria/preprocessed/daily_ppa_parallel_test'
 
         if not os.path.exists(main_dir + '/'+ interact_id):
             os.makedirs(main_dir + '/'+ interact_id)
@@ -703,7 +565,8 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
     if version == 'per_trip':
         result_trips.apply(process_trips, axis=1)
 
-    elif version == 1:  # when dwelling, assume person is not wandering at all
+    # When dwelling, assume person is not wandering at all
+    elif version == 1:
         df_times, part_times = get_df_times(df_part)
 
         print('Creating in_participant column')
@@ -733,7 +596,7 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         df_times['len_cells'] = df_times.apply(lambda x: len(x['cells']), axis=1)
         return df_times
 
-
+    # When dwelling, assume a person can wander between data points
     elif version == 2:
         df_times, part_times = get_df_times(df_part)
 
@@ -754,29 +617,3 @@ def ppa_person(df_part_csv_path, df_city_path, trips_dwells_path=None, version=1
         # TODO: delete next line -- it is for testing purposes only
         df_times['len_cells'] = df_times.apply(lambda x: len(x['cells']), axis=1)
         return df_times
-
-    elif version == 3:
-        df_times, part_times = get_df_times(df_part)
-
-        print('Creating in_participant column')
-        df_times['in_participant'] = df_times.apply(f1, axis=1)  # temporary column
-        df_times.set_index('utc_date', inplace=True)
-        print('Inserting known locations')
-        df_times['cells'] = df_times.apply(f3, axis=1)
-
-        # insert large "wine glass"
-        print('Creating large wine glass')
-        result_visits.apply(large_wine_glass, axis=1)
-        print('Get location of nearest two measurements in time')
-        df_times['loc_tuples_e_n'] = df_times.apply(f2, axis=1)
-        print('Computing PPA for remaining time steps')
-        df_times['cells'] = df_times.apply(f4, axis=1)
-        df_times = df_times.drop(['in_participant', 'loc_tuples_e_n'], axis=1)
-        # TODO: delete next line -- it is for testing purposes only
-        df_times['len_cells'] = df_times.apply(lambda x: len(x['cells']), axis=1)
-        return df_times
-
-
-
-
-

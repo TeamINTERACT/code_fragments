@@ -1,3 +1,8 @@
+"""
+Author: Antoniu Vadan, summer 2019
+Description: this file contains function which gets n points between two points along a street network
+"""
+
 import osmnx as ox
 import networkx as nx
 import geopandas as gpd
@@ -11,39 +16,43 @@ import datetime
 def pickle_graph(shp_ll, path_out):
     """
     Given a path to a shapefile in (LONG LAT) format, get geometry and pickle the
-        road network contained within the boundary
+        road network contained within the boundary. Road network is not simplified.
+        i.e. roads that are not straight/linear are shaped by a series of nodes.
+        (if simplify=True, then curved roads are represented by a few nodes, reducing the
+        accuracy of the a* algorithm
     :param shp_ll: path to shapefile in long lat format
     :param path_out: path to where to pickle
     :return: None
     """
 
     geometry = gpd.read_file(shp_ll).at[0, 'geometry']
-    G = ox.graph_from_polygon(geometry, network_type='drive')
+    G = ox.graph_from_polygon(geometry, network_type='drive', simplify=False)
     nx.write_gpickle(G, path_out)
 
-def pickle_utm_graph(shp_ll, path_out, undirected):
+def pickle_utm_graph(shp_ll, path_out):
     """
     Given a path to a shapefile in (LONG LAT) format, get geometry and pickle the
-        road network contained within the boundary with data in UTM format
+        road network contained within the boundary with data in UTM format.
+        Road network is not simplified.
+        i.e. roads that are not straight/linear are shaped by a series of nodes.
+        (if simplify=True, then curved roads are represented by a few nodes, reducing the
+        accuracy of the a* algorithm
     :param shp_ll: path to shapefile in long lat format
     :param path_out: path to where to pickle
-    :param undirected: pickle the undirected version of the graph
     :return: None
     """
     geometry = gpd.read_file(shp_ll).at[0, 'geometry']
-    G = ox.graph_from_polygon(geometry, network_type='drive')
+    G = ox.graph_from_polygon(geometry, network_type='drive', simplify=False)
     graph_proj = ox.project_graph(G)  # converts to UTM
-    if not undirected:
-        nx.write_gpickle(graph_proj, path_out)
-    else:
-        graph_proj = graph_proj.to_undirected()
-        nx.write_gpickle(graph_proj, path_out)
+    graph_proj = graph_proj.to_undirected()
+    nx.write_gpickle(graph_proj, path_out)
 
 def points_along_path(p1, p2, graph_proj, n):
     """
     Given 2 points, compute shortest path. Along that path, get n evenly spaced points
     There is a chance that the resultant points MAY NOT lie exactly on road network, as
-        linear interpolation is used along segments of the linestring
+        linear interpolation is used along segments of the linestring. Use non-simplified
+        road graphs.
     :param p1: starting point (northing, easting)
     :param p2: destination (northing, easting)
     :param graph_proj: graph projection to UTM -- undirected
@@ -57,7 +66,7 @@ def points_along_path(p1, p2, graph_proj, n):
     target_node = ox.get_nearest_node(graph_proj, p2, method='euclidean')
     e_n1 = nodes_proj.at[orig_node, 'geometry']
     e_n2 = nodes_proj.at[target_node, 'geometry']
-    print(e_n1)
+    # print(e_n1)
     if e_n1 == e_n2:  # check if nodes are the same
         return [(e_n1.bounds[1], e_n1.bounds[0])] * (n+2)
     #################### TESTING ####################

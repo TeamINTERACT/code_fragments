@@ -1,3 +1,8 @@
+"""
+Author: Antoniu Vadan, summer 2019
+Description: get probability of a person having taken the bus.
+"""
+
 import pandas as pd
 import numpy as np
 import math
@@ -25,6 +30,10 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
     """
 
     def compute_jppa(row):
+        """
+        Create dataframe with participant trip timestamps as index and bus route ids as column headers. Entries are 1
+        if participant path intersects that of the bus at a given time. 0 otherwise.
+        """
         try:
             part_cells = participant.at[row.name, 'cells']
             bus_cells = one_bus_trip.at[row.name, 'cells']  # this step may raise an error if there is no entry in
@@ -71,22 +80,21 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
 
     stamp = pd.Timestamp(date)
     day_of_week = stamp.day_name().lower()
-    day_of_week = 'monday'  # TODO: remove this line as it artificially sets day to monday
+    # day_of_week = 'monday'  # TODO: remove this line as it artificially sets day to monday
 
     # initialize jppa dataframe for this trip
     jppa = pd.DataFrame(participant['utc_date'])
     jppa = jppa.set_index('utc_date')
     participant = participant.set_index('utc_date')
 
-    # read in the cells column as sets instead of strings
-    # some entries are set() instead of {...}
+    # Read in the cells column as sets instead of strings.
+    # Some entries are set() instead of {...}
     participant['cells'] = participant['cells'].apply(lambda x: literal_eval(x) if x[0] == '{' else set())
-
-    # TODO: filter out irrelevant bus routes HERE
 
     starting_point = participant.iloc[0]['cells'].pop() # (northing, easting) tuple
     ending_point = participant.iloc[-1]['cells'].pop() # (northing, easting) tuple
 
+    # Filtering out bus routes which are not within 600m of starting location and ending location
     radius = 600  # in meters -- distance travelled at 2m/s if travelling for 5 mins
     print('done with the setup, now querying')
     indices_start = city_tree.query_ball_point([starting_point[0], starting_point[1]], radius)  # return indices of points within radius
@@ -95,6 +103,7 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
     indices_end = city_tree.query_ball_point([ending_point[0], ending_point[1]], radius)
     coordinates_end = [city_points[n] for n in indices_end]
 
+    # List of coordinates of locations where relevant bus routes have a bus stop
     coordinates_total = coordinates_start + coordinates_end
 
     print('reading in routes dictionary')
@@ -135,16 +144,39 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
             one_bus_trip['cells'] = one_bus_trip['cells'].apply(lambda x: literal_eval(x))  # interpret set from string format back to set
             jppa[route_id] = jppa.apply(compute_jppa, axis=1)
 
+        # jppa now contains a column for all bus routes which had stops within a certain range of the starting points
+        # and the ending points. Entries are 1 if participant's path intersects that of a route at a given time.
+        # 0 otherwise.
+        # Drop the bus routes whose paths do not intersect with those of the participant
         if not 1 in jppa[route_id].values:
             jppa.drop(route_id, axis=1, inplace=True)
 
+    # For each column (route_ids) compute the probability of being on the bus and save the max
     probabilities = jppa.apply(compute_probabilities).values
     probabilities = [x for x in probabilities if not math.isnan(x)]
     p = max(probabilities)
 
+    # Return new jppa -- dataframe containing interact_id, trip_start_time, and the probability of being on the bus
+    # during that trip
     trip_start_time = jppa.index.values[0]
     data = {'interact_id': interact_id, 'trip_start_time' : [trip_start_time], 'probability': [p]}
     jppa = pd.DataFrame(data)
 
     return jppa
 
+
+# EXAMPLE
+
+part_id = 101143953
+all_bus_main_dir = 'bus_victoria_17aug_3dec_17/week_days'
+all_part_main_dir = '../jppa_participant_dfs/victoria/preprocessed/daily_ppa'
+trip_part = all_part_main_dir + '/' + str(part_id) + '/' + '2017-10-08' + '/start_time_20_34_00'
+city_path = 'city_grids/victoria_15_625'
+city = pd.read_pickle(city_path)
+bus_stop_dictionary_dir_path = 'bus_victoria_17aug_3dec_17/day_dictionary'
+
+print('setting up city grid, tree, and points')
+tree, points = city_kdtree(city)
+
+
+print(jppa_per_trip(trip_part, all_bus_main_dir, tree, points, bus_stop_dictionary_dir_path).to_string())

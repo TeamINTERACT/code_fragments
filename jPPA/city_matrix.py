@@ -1,6 +1,6 @@
 """
-Author: Antoniu Vadan
-Description: the following code sets up the 2D pandas dataframe of
+Author: Antoniu Vadan, summer 2019
+Description: the following code sets up the pandas dataframe of
     data points representing grid for a given city (ASSUMPTION: city falls in one UTM
     zone number and zone letter)
 """
@@ -136,30 +136,30 @@ def shp_lcc_to_ll(path_shp_in, path_shp_out):
 
 
 if __name__ == '__main__':
-    file = str(sys.argv[1])
-    pickle_file = str(sys.argv[2])
-    resolution = int(sys.argv[3])
-    # file = 'city_shapefiles/saskatoon.shp'
-    # pickle_file = 'city_grids/saskatoon_15_625'
-    # resolution = 15.625
-    before = time.time()
-    city_matrix(file, pickle_file, resolution)
-    after = time.time()
-    print(str(datetime.timedelta(seconds=(after - before))))
-    # shp_lcc_to_ll('city_shapefiles/victoria.shp', 'city_shapefiles/victoria_long_lat.shp')
+    # file = str(sys.argv[1])
+    # pickle_file = str(sys.argv[2])
+    # resolution = int(sys.argv[3])
+    # # file = 'city_shapefiles/saskatoon.shp'
+    # # pickle_file = 'city_grids/saskatoon_15_625'
+    # # resolution = 15.625
+    # before = time.time()
+    # city_matrix(file, pickle_file, resolution)
+    # after = time.time()
+    # print(str(datetime.timedelta(seconds=(after - before))))
+    # # shp_lcc_to_ll('city_shapefiles/victoria.shp', 'city_shapefiles/victoria_long_lat.shp')
 
 
 
-#### Extracts xmin, ymin, xmax, ymax when needed ####
-#
-# multipolygon = get_polygon_points('city_shapefiles/victoria.shp')
-#
-# if len(multipolygon) == 1:
-#     multipolygon = MultiPolygon([Polygon(multipolygon[0])])
-# else:
-#     multi = [Polygon(poly) for poly in multipolygon]
-#     multipolygon = MultiPolygon(multi)
-#
-# xmin, ymin, xmax, ymax = multipolygon.bounds
-#
-# print(xmin, ymin, xmax, ymax)
+    #### Extracts xmin, ymin, xmax, ymax when needed ####
+
+    # multipolygon = get_polygon_points('city_shapefiles/victoria.shp', 'll')
+    #
+    # if len(multipolygon) == 1:
+    #     multipolygon = MultiPolygon([Polygon(multipolygon[0])])
+    # else:
+    #     multi = [Polygon(poly) for poly in multipolygon]
+    #     multipolygon = MultiPolygon(multi)
+    #
+    # xmin, ymin, xmax, ymax = multipolygon.bounds
+    #
+    # print(ymin, xmin, ymax, xmax)

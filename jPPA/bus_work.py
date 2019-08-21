@@ -1,26 +1,22 @@
 """
-Author: Antoniu Vadan
+Author: Antoniu Vadan, summer 2019
+Description: Functions to compute Potential Path Area or path interpolation for buses
 """
 
 import pandas as pd
 from datetime import datetime, timedelta
 from ppa_jppa import city_kdtree
 from street_network import points_along_path
-import osmnx as ox
 import networkx as nx
 import matplotlib.pyplot as plt
 import time
 import sys, os, pickle
-from concurrent.futures import ThreadPoolExecutor as PoolExecutor
-
-
-# trips = pd.read_csv('bus_saskatoon_6jan_27april/main1.csv')
-# print(trips.head(40).to_string())
+from concurrent.futures import ProcessPoolExecutor as PoolExecutor
 
 
 def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
     """
-    Function computes PPA dataframe of a bus system.
+    Function computes PPA dataframe of a bus system for a given day.
     :param bus_main_path: path to dataframe (in csv format) containing all bus data from transitfeeds as
         organized by bus_df_extraction.py (columns are ['route_id', 'trip_id', 'service_id', 'time',
         'stop_sequence', 'easting', 'northing'])
@@ -33,6 +29,10 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
     """
 
     def process_trip_df(df):
+        """
+        Compute PPA for each individual trip. Contains functions which do all the work.
+        """
+
         def in_main(row):
             if row['time'].time() in main_times:
                 return True
@@ -40,6 +40,9 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
                 return False
 
         def insert_known(row):
+            """
+            Insert the known locations of the bus in the main 'cells' column
+            """
             if row['in_main']:
                 result = set()
                 temp = df.loc[df['time'].dt.time == row['time'].time()].reset_index()
@@ -50,6 +53,13 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
                 return result
 
         def loc_tuples(row):
+            """
+            If location is known at a given time step, the 'loc_tuples' column contains that location.
+            Otherwise, it contains a tuple with the following structure
+                ((Point1_northing, Point1_easting, integer1), (Point2_northing, Point2_easting, integer2))
+            indicating that Point1 was visited integer1 minutes before, and Point2 will be visited integer2 minutes
+                after the row's timestamp.
+            """
             if row['cells']:
                 return row['cells']
             j = 1
@@ -70,6 +80,10 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
             return (temp1[0], temp1[1], j), (temp2[0], temp2[1], k)
 
         def circles(row):
+            """
+            If the 'loc_tuples' column is not None, then compute the intersection of the circle centered at Point1
+            with radius integer1 * vmax and the circle centered at Point2 with radius integer2 * vmax
+            """
             if not row['cells'] and row['loc_tuples'] is not None:
                 point1 = row['loc_tuples'][0]  # tuple of tuples with location data
                 point2 = row['loc_tuples'][1]
@@ -88,7 +102,6 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
 
             else:
                 return row['cells']
-
 
 
         # create dataframe which has times starting at the time when the df starts at
@@ -156,7 +169,7 @@ def ppa_bus_date(bus_main_path, calendar_path, df_city_path, date_str, vmax=10):
 
 def ppa_bus_day(bus_main_path, calendar_path, df_city_path, day_of_week, vmax=10):
     """
-    Function computes PPA dataframe of a bus system.
+    Function computes PPA dataframe of a bus system on a given day of the week.
     :param bus_main_path: path to dataframe (in csv format) containing all bus data from transitfeeds as
         organized by bus_df_extraction.py (columns are ['route_id', 'trip_id', 'service_id', 'time',
         'stop_sequence', 'easting', 'northing'])
@@ -168,8 +181,10 @@ def ppa_bus_day(bus_main_path, calendar_path, df_city_path, day_of_week, vmax=10
         (easting, northing) data
     """
 
-
     def process_trip_df(df):
+        """
+        Compute PPA for each individual trip. Contains functions which do all the work.
+        """
         def in_main(row):
             if row['time'].time() in main_times:
                 return True
@@ -177,6 +192,9 @@ def ppa_bus_day(bus_main_path, calendar_path, df_city_path, day_of_week, vmax=10
                 return False
 
         def insert_known(row):
+            """
+            Insert the known locations of the bus in the main 'cells' column
+            """
             if row['in_main']:
                 result = set()
                 temp = df.loc[df['time'].dt.time == row['time'].time()].reset_index()
@@ -187,6 +205,14 @@ def ppa_bus_day(bus_main_path, calendar_path, df_city_path, day_of_week, vmax=10
                 return result
 
         def loc_tuples(row):
+            """
+            If location is known at a given time step, the 'loc_tuples' column contains that location.
+            Otherwise, it contains a tuple with the following structure
+                ((Point1_northing, Point1_easting, integer1), (Point2_northing, Point2_easting, integer2))
+            indicating that Point1 was visited integer1 minutes before, and Point2 will be visited integer2 minutes
+                after the row's timestamp.
+            """
+
             if row['cells']:
                 return row['cells']
             j = 1
@@ -207,6 +233,10 @@ def ppa_bus_day(bus_main_path, calendar_path, df_city_path, day_of_week, vmax=10
             return (temp1[0], temp1[1], j), (temp2[0], temp2[1], k)
 
         def circles(row):
+            """
+            If the 'loc_tuples' column is not None, then compute the intersection of the circle centered at Point1
+            with radius integer1 * vmax and the circle centered at Point2 with radius integer2 * vmax
+            """
             if not row['cells'] and row['loc_tuples'] is not None:
                 point1 = row['loc_tuples'][0]  # tuple of tuples with location data
                 point2 = row['loc_tuples'][1]
@@ -311,6 +341,9 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
     """
 
     def interpolate(df):
+        """
+        Fill in in the gaps in the GPS data linearly along the road network for one bus trip.
+        """
         def in_main(row):
             if row['time'].time() in main_times:
                 return True
@@ -318,6 +351,9 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
                 return False
 
         def insert_known(row):
+            """
+            Insert the known locations of the bus in the main 'cells' column
+            """
             if row['in_main']:
                 result = set()
                 temp = df.loc[df['time'].dt.time == row['time'].time()].reset_index()
@@ -328,6 +364,13 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
                 return result
 
         def loc_tuples(row):
+            """
+            If location is known at a given time step, the 'loc_tuples' column contains that location.
+            Otherwise, it contains a tuple with the following structure
+                ((Point1_northing, Point1_easting, integer1), (Point2_northing, Point2_easting, integer2))
+            indicating that Point1 was visited integer1 minutes before, and Point2 will be visited integer2 minutes
+                after the row's timestamp.
+            """
             if row['cells']:
                 return row['cells']
             j = 1
@@ -349,7 +392,7 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
 
         def fill_in(row):
             """
-            For each gap in the participant dataframe, use street_network.py function to interpolate
+            For each gap in the participant dataframe, use street_network.py function to interpolate location
             """
             if not row['cells'] and row['loc_tuples_e_n'] is not None:
                 point1_data = row['loc_tuples_e_n'][0]  # tuple with location data; e.g. (northing, easting, n)
@@ -371,12 +414,13 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
             else:
                 return row['cells']
 
-        # print(df)
-        # print(type(df))
-        # sys.exit()
         start = df.at[0, 'time'].strftime('%Y-%m-%d %H:%M:%S')
 
         # ASSUMPTION: no bus trip is longer than 90 minutes -- extra time will be trimmed off
+        # Create a new dataframe -- df_times -- with timestamps as index starting from the beginning of the
+        # bus trip and lasting 90 minutes.
+        # Bus trip may originally last less and have gaps in the data.
+        # The gaps are the reason why we create a new dataframe.
         times = pd.date_range(start, periods=90, freq='1min')
         df_times = pd.DataFrame(times)
         df_times.columns = ['time']
@@ -390,11 +434,11 @@ def interpolate_bus_route(bus_main_path, calendar_path, road_graph_path, day_of_
         main_times = df['time'].dt.time.to_list()
         df_times['in_main'] = df_times.apply(in_main, axis=1)
 
-        # keep slice starting from first in_main timestamp to last in_main timestamp
+        # Keep slice starting from first in_main timestamp to last in_main timestamp
         df_times = df_times.loc[: df_times[(df_times['in_main'] == True)].index[-1], :]
         df_times['cells'] = df_times.apply(insert_known, axis=1)
 
-        # find how far a row with no easting/northing entries is from the nearest rows that DO contain
+        # Find how far a row with no easting/northing entries is from the nearest rows that DO contain
         #   easting and northing
         df_times = df_times.set_index('time')
         df_times['loc_tuples_e_n'] = df_times.apply(loc_tuples, axis=1)
@@ -475,27 +519,48 @@ def create_routes_dict(bus_main_path, calendar_path, bus_dictionary_path):
             pickle.dump(locations_routes, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+bus_path = 'bus_victoria_17aug_3dec_17/main1_15_625.csv'
+calendar = 'bus_victoria_17aug_3dec_17/calendar.txt'
+graph_path = 'graphs/victoria_not_simplified_road_utm_undirected'
+day = 'monday'
+resolution = 15.625
+save_to = 'bus_victoria_17aug_3dec_17/week_days_parallel'
+
+days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+main_path = 'bus_victoria_17aug_3dec_17/main1_15_625.csv'
+bus_calendar_path = 'bus_victoria_17aug_3dec_17/calendar.txt'
+
+
 ################################################################################################
-# def wrap_func(route):
-#     interpolate_bus_route(bus_path, calendar, graph_path, day, route, resolution)
-#
-#
-# main_df = pd.read_csv(main_path, header=0, usecols=['route_id'])
-#
-# wed_fri_sat_sun = ['wednesday', 'friday', 'saturday', 'sunday']
-#
-# for day in wed_fri_sat_sun:
-#     print('Starting work on', day)
-#     list_routes = list(main_df['route_id'].unique())
-#     with PoolExecutor(max_workers=2) as executor:
-#         for _ in executor.map(wrap_func, list_routes):
-#             pass
+################################################################################################
+def wrap_func(route_day):
+    """
+    :param route_day: (route_id, day_of_week) tuples
+    """
+    route, day = route_day[0], route_day[1]
+    print('Starting work on', route, 'on', day)
+    interpolate_bus_route(bus_path, calendar, graph_path, day, route, resolution, save_to)
+
+def main():
+    main_df = pd.read_csv(main_path, header=0, usecols=['route_id'])
+    wed_fri_sat_sun = ['wednesday', 'friday', 'saturday', 'sunday']
+
+    for day in wed_fri_sat_sun:
+        print('Starting work on', day)
+        list_routes = list(main_df['route_id'].unique())
+        list_routes = [(x, day) for x in list_routes]
+        with PoolExecutor(max_workers=32) as executor:
+            for _ in executor.map(wrap_func, list_routes):
+                pass
 ################################################################################################
 
-
-
-
-
-
+if __name__ == '__main__':
+    # Running the following code will split the computational load of interpolating path of trips for all routes
+    # into `max_workers` processes.
+    t1 = time.time()
+    main()
+    t2 = time.time()
+    print(str(timedelta(seconds=(t2 - t1))), ' -- COMPLETE -- done computing path interpolation for buses')
 
 
