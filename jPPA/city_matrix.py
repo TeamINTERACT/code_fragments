@@ -136,18 +136,11 @@ def shp_lcc_to_ll(path_shp_in, path_shp_out):
 
 
 if __name__ == '__main__':
-    # file = str(sys.argv[1])
-    # pickle_file = str(sys.argv[2])
-    # resolution = int(sys.argv[3])
-    # # file = 'city_shapefiles/saskatoon.shp'
-    # # pickle_file = 'city_grids/saskatoon_15_625'
-    # # resolution = 15.625
-    # before = time.time()
-    # city_matrix(file, pickle_file, resolution)
-    # after = time.time()
-    # print(str(datetime.timedelta(seconds=(after - before))))
-    # # shp_lcc_to_ll('city_shapefiles/victoria.shp', 'city_shapefiles/victoria_long_lat.shp')
-
+    file = str(sys.argv[1])
+    pickle_file = str(sys.argv[2])
+    resolution = int(sys.argv[3])
+    city_matrix(file, pickle_file, resolution)
+    
 
 
     #### Extracts xmin, ymin, xmax, ymax when needed ####

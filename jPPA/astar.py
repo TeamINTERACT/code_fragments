@@ -141,7 +141,6 @@ def astar(df_histogram, start, end):
                 elif child == open_node and child.g < open_node.g:
                     tracker = i
 
-            ########## trying something ###########
             # if the child is in the open list already and the cost found now is lower than the cost found
             #   in open_list, add this node to the open list and remove the old node
             if tracker is not None:

@@ -69,26 +69,7 @@ def points_along_path(p1, p2, graph_proj, n):
     # print(e_n1)
     if e_n1 == e_n2:  # check if nodes are the same
         return [(e_n1.bounds[1], e_n1.bounds[0])] * (n+2)
-    #################### TESTING ####################
-    # cols = list(nodes_proj.columns.values)
-    # print('orig node:', orig_node)
-    # print(nodes_proj.loc[orig_node, cols])
-    # print(edges_proj[edges_proj['v'] == 27571866].to_string())
-    # print('target node:', target_node)
-    # fig, ax = ox.plot_graph(graph_utm, show=False, close=False)
-    # e_n1 = nodes_proj.at[orig_node, 'geometry']
-    # e_n2 = nodes_proj.at[target_node, 'geometry']
-    # print(e_n1)
-    # print(e_n2)
-    # plt.scatter([e_n1.bounds[0], e_n2.bounds[0]],
-    #             [e_n1.bounds[1], e_n2.bounds[1]], c='red', s=30)
-    # # plt.scatter(e_n1.bounds[0], e_n1.bounds[1], c='red', s=30)
-    # plt.show()
-    # sys.exit()
-    #################################################
-    # node entry in dataframe
-    # o_closest = nodes_proj.loc[orig_node]
-    # t_closest = nodes_proj.loc[target_node]
+   
     route = nx.shortest_path(G=graph_proj, source=orig_node, target=target_node, weight='length')
     # route_length = nx.shortest_path_length(G=graph_proj, source=orig_node, target=target_node, weight='length')
 
@@ -96,22 +77,8 @@ def points_along_path(p1, p2, graph_proj, n):
     ### CODE FOR INTERPOLATING LOCATION ALONG LINESTRING/MULTILINESTRING ###
     node_list = list(map(lambda node: nodes_proj.at[node, 'geometry'], route))  # list of Point objects along route
     path_line = LineString(node_list)
-    # Code from:
+    # Code adapted from:
     # https://stackoverflow.com/questions/34906124/interpolating-every-x-distance-along-multiline-in-shapely
-    # def redistribute_vertices(geom, distance):
-    #     if geom.geom_type == 'LineString':
-    #         num_vert = int(round(geom.length / distance))
-    #         if num_vert == 0:
-    #             num_vert = 1
-    #         return LineString(
-    #             [geom.interpolate(float(n) / num_vert, normalized=True)
-    #              for n in range(num_vert + 1)])
-    #     elif geom.geom_type == 'MultiLineString':
-    #         parts = [redistribute_vertices(part, distance)
-    #                  for part in geom]
-    #         return type(geom)([p for p in parts if not p.is_empty])
-    #     else:
-    #         raise ValueError('unhandled geometry %s', (geom.geom_type,))
     def redistribute_vertices(geom, num_vert):
         if geom.geom_type == 'LineString':
             if num_vert == 0:
@@ -123,8 +90,6 @@ def points_along_path(p1, p2, graph_proj, n):
         else:
             raise ValueError('unhandled geometry %s', (geom.geom_type,))
 
-    # k = route_length/(n+1)
-    # multiline_r = redistribute_vertices(path_line, k)
     multiline_r = redistribute_vertices(path_line, n)
     map_dict = mapping(multiline_r)  # dictionary. 'type':'LineString', 'coordinates':((.....))
     multiline_r = list(map_dict['coordinates'])  # list of coordinate tuples (easting, northing) unrounded
@@ -132,41 +97,3 @@ def points_along_path(p1, p2, graph_proj, n):
     return multiline_r
 
 
-if __name__ == '__main__':
-    print('reading graph')
-    graph_utm = nx.read_gpickle('graphs/victoria_statca_road_utm_undirected')
-    # undirected = graph_utm.to_undirected()
-    # nx.write_gpickle(undirected, 'graphs/victoria_statca_road_utm_undirected')
-    # the following point1 as source cannot be associated with a path (5777000, 387750)
-    # point1 = (5777000, 387750)  # note: Point objects have (easting, northing) format
-    # point2 = (5760000, 389000)
-    # ((5772500, 395500, 1), (5772500, 395250, 3))
-    # point1 = (5772500, 395500)
-    # point2 = (5772500, 395250)
-    point1 = (5369300, 470750)
-    point2 = (5369250, 470750)
-    # TODO: instead of 5 (chosen as example), this parameter should be given by amount of
-    # TODO:     minute-wise timestamps in between the two points which do not have a
-    # TODO:     location associated with them
-    result = points_along_path(point1, point2, graph_utm, 29)
-    print('Length:', len(result))
-    print(result)
-    # print(result[28])
-
-    # sys.exit()
-
-    # the following 2 lines are for plotting
-    eastings = [x[0] for x in result]
-    northings = [x[1] for x in result]
-
-    print('plotting')
-
-    # fig, ax = ox.plot_graph_route(graph_proj, route, origin_point=p1, destination_point=p2)
-    fig, ax = ox.plot_graph(graph_utm, show=False, close=False)
-    plt.scatter(eastings, northings, c='red', s=30)
-
-    # plt.tight_layout()
-    plt.show()
-
-    # pickle_utm_graph('city_shapefiles/saskatoon_lat_long.shp',
-    #                  'graphs/saskatoon_statca_road_utm_undirected', True)
