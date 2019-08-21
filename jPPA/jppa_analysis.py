@@ -11,7 +11,7 @@ from ast import literal_eval
 from ppa_jppa_stable_trip_det import city_kdtree
 
 
-def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_stop_dictionary_dir):
+def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_stop_dictionary_dir, threshold):
     """
     Compute dataframe indicating whether a participant, during a specific trip, intersected the path of a bus route
         at a given time. Rows are timestamps and columns are bus route ids. Entries are 1s if they intersect, otherwise.
@@ -21,7 +21,8 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
     :param city_grid: city_grid dataframe (not the path)
     :param bus_stop_dictionary_dir: path to directory containing 7 pickle files -- dictionaries mapping location
                                     tuples to a list of route_ids
-
+    :param threshold: minimum amount of minutes that must separate the first and the last timestamp when the path of
+                        the participant overlaps that of a bus
     :return: dataframe indexed from the start time to the end time of the participant trip with column names
                 being names of bus routes that are relevant to that participant (within 600m of the starting point of
                 the trip and 600m within the ending point of the trip). Entries in the dataframe are 1s (participant
@@ -58,9 +59,9 @@ def jppa_per_trip(part_trip_path, bus_days_path, city_tree, city_points, bus_sto
         vals = col.values
         idx = [index for index, val in enumerate(vals) if val == 1]  # get indices of occurences of 1
 
-        k = 2 # must potentially be on a bus for at least 3 minutes -- preferably more when using Saskatoon data
+        threshold = 2 # must potentially be on a bus for at least 3 minutes -- preferably more when using Saskatoon data
 
-        if len(vals[idx[0]: (idx[-1] + 1)]) > k:
+        if len(vals[idx[0]: (idx[-1] + 1)]) > threshold:
             p = sum(vals[idx[0] : (idx[-1] + 1)]) / len(vals[idx[0] : (idx[-1] + 1)])
             return p
 
@@ -178,5 +179,5 @@ bus_stop_dictionary_dir_path = 'bus_victoria_17aug_3dec_17/day_dictionary'
 print('setting up city grid, tree, and points')
 tree, points = city_kdtree(city)
 
-
-print(jppa_per_trip(trip_part, all_bus_main_dir, tree, points, bus_stop_dictionary_dir_path).to_string())
+k = 2
+print(jppa_per_trip(trip_part, all_bus_main_dir, tree, points, bus_stop_dictionary_dir_path, k).to_string())
