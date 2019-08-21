@@ -9,7 +9,7 @@ Tasks:
 1. review code in astar.py.
 2. Test validity of the modified Astar pathfinding method. One way to do so is as follows:
 	- get dataframe containing visit counts for each cell for minute-by-minute SenseDoc data
-	- get dataframe containing visit counds for each cell for every 5 minute SenseDoc data, with gaps filled in with Astar
+	- get dataframe containing visit counts for each cell for every 5th minute in the minute-by-minute SenseDoc data, with gaps filled in with Astar
 	- compute entry-wise mean squared error
 
 Bugs:
