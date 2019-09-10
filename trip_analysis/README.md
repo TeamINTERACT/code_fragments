@@ -13,4 +13,4 @@ The main code can be found in victoria_analysis.py. In this folder, by default, 
 [1] Thierry, Benoit, Basile Chaix, and Yan Kestens. "Detecting activity locations from raw GPS data: a novel kernel-based algorithm." International journal of health geographics 12.1 (2013): 14.
 </p>
 
-### Any question, email to luana.fragoso@usask.ca
+#### Any question, email to luana.fragoso@usask.ca
