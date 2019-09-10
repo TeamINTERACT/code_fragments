@@ -1,6 +1,6 @@
 ## Purpose
 <p>
-This code has the intention to identify similar participants based on their movement. By movement, we use two different trip detection. A basic one with only dwell followed by trip every time a participant stays in the same place and move, respectively. And a more sofisticated method based on a kernel trip detection described by Benoit et al. [1]. Once the trips are detected, its sequence is converted to a text string which is applied with text mining methods to identify similar movement behaviors.
+This code has the intention to identify similar participants based on their movement. By movement, we use two different trip detection. A basic one with only dwell followed by trip every time a participant stays in the same place and move, respectively. And a more sofisticated method based on a kernel trip detection described by Benoit et al. [1]. Once the trips are detected, each trip sequence is converted to a text string which is applied with text mining methods to identify similar movement behaviors.
 </p>
 
 ## Instructions
