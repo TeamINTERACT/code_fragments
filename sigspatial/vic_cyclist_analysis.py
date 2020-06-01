@@ -136,13 +136,23 @@ stat_test(sims["btw"]["min_n"], info)
 stplt.plot_bar(RESULTS_PATH, sims["wth"]["min_n"], info["group"], c_type, min_ngram=c_type.value, add_id=False)
 stat_test(sims["wth"]["min_n"], info, btw=False)
 
+# Within and between similarity analysis did not show any difference between the similarity distributions of
+# biking frequency groups
+
 # -------- graph analysis
-threshold = 0.5
+threshold = 0.6
 G = stplt.to_graph(sims["btw"]["min_n"], info["group"].index, threshold)
-stplt.plot_graph(RESULTS_PATH, G, info["group"], threshold, c_type, c_type.value)
+stplt.plot_graph(RESULTS_PATH, G, info["group"], threshold, c_type, c_type.value, node_label=True)
 
 partitions = stplt.louvain(sims["btw"]["min_n"], info["group"], threshold, two_partitions=False)
 stplt.plot_graph(RESULTS_PATH, G, partitions["partition"], threshold, c_type, c_type.value)
+
+# Threshold 0 - Why participant 54 is separated from the rest?
+# Threshold 0.1 - Why participant 13 and 118 are separated from the rest?
+# Threshold 0.4 - Are participants 127 and 135 from same family/neighbour?
+# Threshold 0.5 - Are participants 124, 64, 69, 40, and 17 from the same family/neighbour?
+# Threshold 0.6 - Why participants 124 and 40 are the most similar pair in the data?
+
 
 
 
