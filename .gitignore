@@ -4,3 +4,9 @@ sigspatial/.DS_Store
 sigspatial/results
 sigspatial/info
 .DS_Store
+movement_analysis/results
+movement_analysis/info
+movement_analysis/.idea/vcs.xml
+movement_analysis/.idea/misc.xml
+*.xml
+movement_analysis/.idea
