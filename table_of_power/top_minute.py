@@ -25,6 +25,10 @@ from wear_time import wear_marking
 
 if __name__ == "__main__":
     city, wave = it.get_command_args("top_minute.py")
+    if '-e' in argv:
+        ethica = True
+    else:
+        ethica = False
     if len(argv) < 4:
         print("Usage: python top_minute.py SITE_NAME WAVE_NUMBER DIRECTORY")
         exit()
@@ -37,21 +41,39 @@ if __name__ == "__main__":
     else:
         print("Using default (1min) time interval.")
         time_type = "min"
-        time_quant = "1"
+        if ethica:
+            time_quant = "5"
+        else:
+            time_quant = "1"
 
     ver = it.get_last_commit_date()
     if wave < 10:
-        top_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' + ver + '.csv'
-        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_top_' + time_quant + time_type + '_' + ver + '.csv'
+        top_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' + ver
+        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_top_' + time_quant + time_type + '_' + ver
     else:
-        top_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' + ver + '.csv'
-        out_fname = output_dir + '/' + city + '_' + str(wave) + '_top_' + time_quant + time_type + '_' + ver + '.csv'
+        top_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' + ver
+        out_fname = output_dir + '/' + city + '_' + str(wave) + '_top_' + time_quant + time_type + '_' + ver
+    if ethica:
+        top_fname = top_fname + '_ethica' + '.csv'
+        out_fname = out_fname + '_ethica' + '.csv'
+    else:
+        top_fname = top_fname + '_sd' + '.csv'
+        out_fname = out_fname + '_sd' + '.csv'
 
     if not isfile(top_fname):
         print("Could not locate file: " + top_fname)
 
+
     chunk_size = 10 ** 6
     header = True
+
+    processed_min = []
+    if isfile(out_fname):
+        header = False
+        data_chunks = pd.read_csv(out_fname, chunksize=chunk_size)
+        for chunk in data_chunks:
+            processed_min = processed_min + chunk['interact_id'].drop_duplicates().to_list()
+        processed_min = list(set(processed_min))
 
     light_thresh = 100
     moderate_thresh = 2020
@@ -73,10 +95,13 @@ if __name__ == "__main__":
         light_thresh = light_thresh * 60 * 24
         moderate_thresh = moderate_thresh * 60 * 24
         vigorous_thresh = vigorous_thresh * 60 * 24
+    if ethica:
+        light_thresh = light_thresh / 5
+        moderate_thresh = moderate_thresh / 5
+        vigorous_thresh = vigorous_thresh / 5
 
     # loading the .shp file for the specified city (only Victoria for now)
-    sf = gpd.GeoDataFrame.from_file(tg.city_sf[city])
-
+    sf = gpd.GeoDataFrame.from_file("CMA/INTERACT_CMA_EPSG4326.shp")
     processed = []
     data_chunks = pd.read_csv(top_fname, chunksize=chunk_size)
 
@@ -86,6 +111,9 @@ if __name__ == "__main__":
 
     for p in processed:
         print("Processing participant " + str(p) + ".")
+        if p in processed_min:
+            print("Already processed")
+            continue
         data_chunks = pd.read_csv(top_fname, chunksize=chunk_size)
         p_data = pd.DataFrame()
         for chunk in data_chunks:
@@ -101,13 +129,19 @@ if __name__ == "__main__":
         static_data = p_data.resample(time_quant + time_type).first().dropna(subset=['interact_id'])
         sum_data = p_data.resample(time_quant + time_type).sum().dropna(subset=['interact_id'])
         static_data[['interact_id', 'age', 'wave_id']] = static_data[['interact_id', 'age', 'wave_id']].astype(int)
-
+        print(p_data.columns)
         # aggregate the existing data depending on its data type
-        minute_data = p_data.drop(['in_city', 'wearing'], axis=1).resample(time_quant + time_type).agg({
+        m_cols = ['lon', 'lat', 'northing', 'easting']
+        s_cols = ['x_count', 'y_count', 'z_count', 'summary_count']
+        f_cols = ['interact_id', 'zone', 'age', 'gender', 'income', 'education', 'ethnicity', 'city_id', 'wave_id']
+        f_cols = ['interact_id', 'zone', 'age', 'gender', 'income', 'ethnicity', 'city_id', 'wave_id']
+        minute_data = p_data.drop(['in_city', 'wearing'], axis=1)[m_cols].resample(time_quant + time_type).median()
+        minute_data[f_cols] = p_data.drop(['in_city', 'wearing'], axis=1)[f_cols].resample(time_quant + time_type).first()
+        minute_data[s_cols] = p_data.drop(['in_city', 'wearing'], axis=1)[s_cols].resample(time_quant + time_type).sum()
+        minute_data = minute_data.dropna(subset=['interact_id'])
+        """minute_data = p_data.drop(['in_city', 'wearing'], axis=1).resample(time_quant + time_type).agg({
             'lon': np.median,
             'lat': np.median,
-            'speed': np.median,
-            'alt': np.median,
             'northing': np.median,
             'easting': np.median,
             'interact_id': 'first',
@@ -122,20 +156,24 @@ if __name__ == "__main__":
             'education': 'first',
             'city_id': 'first',
             'wave_id': 'first',
-        }).dropna(subset=['interact_id'])
-
+            })"""
+        # }).dropna(subset=['summary_count'])
         # in_city and wearing columns are present in the seconds version, but must be recomputed entirely
-        minute_data['in_city'] = tg.in_city(minute_data, sf)
+        minute_data['in_city'] = tg.in_city(minute_data, sf, city)
         minute_data['wearing'] = wear_marking(p_data[['summary_count']], epoch=time_quant + time_type)['wearing']
 
         minute_data['activity_levels'] = "vigorous"
         minute_data.loc[minute_data.summary_count < vigorous_thresh, 'activity_levels'] = "moderate"
         minute_data.loc[minute_data.summary_count < moderate_thresh, 'activity_levels'] = "light"
         minute_data.loc[minute_data.summary_count < light_thresh, 'activity_levels'] = "sedentary"
-        minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "speed", "alt", "northing",
+        minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "northing",
                                                  "easting", "zone", "in_city", "x_count", "y_count", "z_count",
                                                  "summary_count", "wearing", "activity_levels", "age", "gender",
-                                                 "income", "education", "city_id", "wave_id"]]
+                                                 "income", "ethnicity", "city_id", "wave_id"]]
+        #minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "northing",
+        #                                         "easting", "zone", "in_city", "x_count", "y_count", "z_count",
+        #                                         "summary_count", "wearing", "activity_levels", "age", "gender",
+        #                                         "income", "education", "ethnicity", "city_id", "wave_id"]]
         minute_data[["interact_id", "in_city", "x_count", "y_count", "z_count", "wearing", "age", "wave_id"]] = \
             minute_data[["interact_id", "in_city", "x_count", "y_count", "z_count", "wearing", "age", "wave_id"]].astype(int)
         minute_data = minute_data.set_index(['interact_id', 'utcdate'])

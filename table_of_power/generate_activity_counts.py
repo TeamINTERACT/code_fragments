@@ -11,6 +11,7 @@ import interact_tools as it
 import psycopg2 as psy
 import pandas as pd
 import numpy as np
+import resampy
 
 
 cities = {
@@ -21,25 +22,25 @@ cities = {
 }
 
 
-def get_activity_counts(accel_df):
+def get_activity_counts(data_df):
     """
     Calculates the activity counts per second from the provided accelerometer readings
     :param accel_df: A pandas dataframe containing the x, y, and z accelerometer data with a readings frequency of 50 Hz
     :return:
     """
-    accel_df['utc'] = accel_df.utcdate
-    print("Calculating counts.")
+    # accel_df = pd.DataFrame()
+    # for col in data_df:
+    #     accel_df[col] = resampy.resample(np.array(data_df[col]), 50, 30)
+    accel_df = data_df.drop_duplicates(subset=['utcdate'])
     x_activity_count = list(counts(accel_df.x, 50))
     y_activity_count = list(counts(accel_df.y, 50))
     z_activity_count = list(counts(accel_df.z, 50))
     times = accel_df.set_index('utcdate').resample('1s').mean().dropna().reset_index()['utcdate'].astype(str).to_list()
-
     if len(times) > len(x_activity_count):
         times = times[0:len(x_activity_count)]
 
     count_sum = np.power(np.power(x_activity_count, 2) + np.power(y_activity_count, 2) + np.power(z_activity_count, 2),
                          0.5)
-
     to_ret = pd.DataFrame(data={'utcdate': times,
                                 'x_count': x_activity_count,
                                 'y_count': y_activity_count,

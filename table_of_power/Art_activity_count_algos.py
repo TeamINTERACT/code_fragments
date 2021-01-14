@@ -1,11 +1,11 @@
 '''
 Script with article: 
 Converting raw accelerometer data to activity counts 
-using open source code in Matlab, Python, and R – a comparison to ActiLife activity counts
+using open source code in Matlab, Python, and R - a comparison to ActiLife activity counts
 Corresponding author Ruben Brondeel (ruben.brondeel@umontreal.ca)
 This script calculates the Python version of activity counts, 
 The functions are a translation of the Matlab function presented in 
-Brønd JC, Andersen LB, Arvidsson D. Generating ActiGraph Counts from 
+Brond JC, Andersen LB, Arvidsson D. Generating ActiGraph Counts from 
 Raw Acceleration Recorded by an Alternative Monitor. Med Sci Sports Exerc. 2017.
 Python (3.6); run in Eclipse (Oxygen.3a Release (4.7.3a))
 '''

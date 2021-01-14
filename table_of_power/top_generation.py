@@ -1,10 +1,12 @@
 """
+Usage: python top_generation.py CITY WAVE OUTPUT_DIR [-osme]
+
 Author: Kole Phillips
 
 Connect to the INTERACT database, process the data, and generate a csv file containing per-second data for accelerometer
 data, activity counts, gps coordinates in both WGS and UTM, and health data related to the participant.
 
-Usage: python top_generation.py CITY WAVE OUTPUT_DIR
+Arguments:
   CITY: The name of the city the table is to represent
   WAVE: The wave number of the study to represent in the table
   OUTPUT_DIR: Location the output files should be stored in
@@ -13,6 +15,7 @@ Options:
   -o: Ignore and overwrite the existing table of power csv
   -s: Split output into individual table of power files
   -m: Merge output from '-s' option into a single file
+  -e: Use Ethica data instead of Sensedoc data to create the table of power
 """
 
 import interact_tools as it
@@ -22,17 +25,23 @@ import pandas as pd
 from pyproj import Proj
 import geopandas as gpd
 from os.path import isfile, isdir
-from os import remove
 from sys import argv
 from wear_time import wear_marking
 from datetime import timedelta
-from survey_parse import get_survey_answers
+from survey_parse import answers
 
 city_surveys = {
     'victoria': 'vic_data',
     'vancouver': 'van_data',
     'montreal': 'mtl_data',
     'saskatoon': 'skt_data'
+}
+
+city_letters = {
+    'victoria': 'vic',
+    'vancouver': 'van',
+    'montreal': 'mtl',
+    'saskatoon': 'ssk'
 }
 
 city_timezones = {
@@ -43,16 +52,13 @@ city_timezones = {
 }
 
 gender_key = {
-    'victoria': {
-        1: "Male",
-        2: "Female",
-        3: "Transgender",
-        4: "Other"
-    }
-}
-
-city_sf = {
-    'victoria': "CMA/INTERACT_CMA_EPSG4326.shp"
+    1:  "Male",
+    2:  "Female",
+    3:  "TransgenderMale",
+    4:  "TransgenderFemale",
+    5:  "Genderqueer/non-conforming",
+    6:  "Other",
+    77: "Prefer not to answer"
 }
 
 city_zones = {
@@ -63,7 +69,7 @@ city_zones = {
 }
 
 
-def in_city(gps_data, sf):
+def in_city(gps_data, sf, city):
     """
     Determines whether the gps point in the data frame is within the polygon provided by the .shp file
     :param gps_data: the data frame containing rows of latitude and longitude coordinates
@@ -72,67 +78,74 @@ def in_city(gps_data, sf):
     """
     gps_data['in_city'] = 0
     points = gpd.points_from_xy(gps_data.lon, gps_data.lat)
+    multipoly = sf.geometry[it.city_sf[city]]
     in_points = gpd.GeoDataFrame(geometry=points, index=gps_data.reset_index()['utcdate'].to_list())
-    in_points = in_points.assign(**{str(key): in_points.within(geom) for key, geom in sf.geometry.items()}).drop(
-        ['geometry'], axis=1)
+    in_points = in_points.assign(**{'1': in_points.within(multipoly)}).drop(['geometry'], axis=1)
     gps_data.loc[in_points.any(axis=1), 'in_city'] = 1
     return gps_data['in_city']
 
 
+def psql_get_data(query):
+    """
+    Creates a connection to the PSQL database and runs a given query, returning the result in a pandas dataframe
+    :param query: The SQL query to be run
+    :return: A new pandas dataframe containing the results of the query
+    """
+    conn = psy.connect(**it.get_connection_kwargs())
+    to_ret = pd.read_sql(query, conn)
+    conn.close()
+    return to_ret
+
+
 if __name__ == "__main__":
     city, wave = it.get_command_args("top_generation.py")
-    participants = it.get_id_list(city, wave)
+    ver = it.get_last_commit_date()
     if len(argv) < 4:
         print("Usage: python top_generation.py SITE_NAME WAVE_NUMBER OUTPUT_DIR")
         exit()
     output_dir = argv[3]
     if not isdir(output_dir):
         print("Could not locate directory: " + output_dir)
-    if len(argv) > 5:
+    if wave < 10:
+        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' + ver
+    else:
+        out_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' + ver
+    if '-e' in argv:
+        out_fname = out_fname + '_ethica' + '.csv'
+        ethica = True
+    else:
+        out_fname = out_fname + '_sd' + '.csv'
+        ethica = False
+
+    participants = it.iid_list(city, wave, ethica=ethica)
+    if 'iid' in participants.columns:
+        participants['interact_id'] = participants['iid']
+    if len(argv) > 5 and argv[4].isdigit() and argv[5].isdigit():
         high = int(argv[5])
         low = int(argv[4])
         participants = participants.loc[(participants['interact_id'] >= low) & (participants['interact_id'] < high)]
+    f = open('debug.txt', 'w+')
 
-    ver = it.get_last_commit_date()
-    if wave < 10:
-        out_fname = output_dir + '/' + city + '_0' + str(wave) + '_table_of_power_' + ver + '.csv'
-    else:
-        out_fname = output_dir + '/' + city + '_' + str(wave) + '_table_of_power_' + ver + '.csv'
-
-    participants = participants[['interact_id', 'treksoft_id_uid']].dropna()
+    participants.dropna(inplace=True)
     print(participants['interact_id'].tolist())
 
-    if wave < 10:
-        start_end = pd.read_csv(city + "_0" + str(wave) + "_start_end.csv")
-    else:
-        start_end = pd.read_csv(city + "_" + str(wave) + "_start_end.csv")
-
-    kwargs = it.get_connection_kwargs()
-    connection = psy.connect(**kwargs)
-    cursor = connection.cursor()
-
-    # loading the .shp file for the specified city (only Victoria for now)
-    sf = gpd.GeoDataFrame.from_file(city_sf[city])
-
-    # find the link between the two disjoint INTERACT IDs each participant has (situation unique to Victoria Wave 1)
-    if city == 'victoria' and wave == 1:
-        lut = pd.read_csv('xvic_lut.csv', delimiter=';')
-        sdid = pd.read_csv('pairings_with_sdid.csv')
-        pairs = lut.set_index('sensedoc_id').join(sdid.set_index('sensedoc_id'), lsuffix='_lut', rsuffix='_sdid')
-        pairs = pairs[pairs.index.notnull()]
-        pairs = pairs[['interact_id_lut', 'interact_id_sdid', 'treksoft_id_lut']].dropna().astype(int).set_index(
-            'interact_id_lut')
-    else:
-        pairs = pd.DataFrame
+    # loading the .shp file for the specified city
+    sf = gpd.GeoDataFrame.from_file('CMA/INTERACT_CMA_EPSG4326.shp')
 
     if isfile(out_fname) and '-o' not in argv:
-        processed = pd.read_csv(out_fname)['interact_id'].drop_duplicates().to_list()
+        data_chunks = pd.read_csv(out_fname, chunksize=10000)
+        processed = []
+        for chunk in data_chunks:
+            processed = processed + chunk['interact_id'].drop_duplicates().to_list()
+        processed = list(set(processed))
         header = False
     else:
-        if isfile(out_fname):
-            remove(out_fname)
         processed = []
         header = True
+
+    linkage = pd.DataFrame()
+    if city == 'victoria' and wave == 1:
+        linkage = pd.read_csv('~/projects/def-dfuller/interact/permanent_archive/Victoria/Wave1/linkage.csv')
 
     # Merging existing files generated by the '-s' option
     if '-m' in argv:
@@ -141,7 +154,10 @@ if __name__ == "__main__":
             if p.interact_id in processed:
                 print("Participant has already been processed.\n")
                 continue
-            in_fname = output_dir + '/' + str(p.interact_id) + '_table_of_power_' + it.get_last_commit_date() + '.csv'
+            if ethica:                
+                in_fname = output_dir + '/' + str(p.interact_id) + '_table_of_power_' + it.get_last_commit_date() + '_ethica.csv'
+            else:
+                in_fname = output_dir + '/' + str(p.interact_id) + '_table_of_power_' + it.get_last_commit_date() + '_sd.csv'
             if not isfile(in_fname):
                 print("File does not exist.")
                 continue
@@ -152,85 +168,171 @@ if __name__ == "__main__":
                 p_top.to_csv(out_fname)
         print("Merge complete.")
         exit()
-
+    aborted = []
     for p in participants.itertuples():
+        print(p.interact_id)
         if '-s' in argv:
-            out_fname = output_dir + '/' + str(p.interact_id) + '_table_of_power_' + it.get_last_commit_date() + '.csv'
+            out_fname = output_dir + '/' + str(p.interact_id) + '_table_of_power_' + it.get_last_commit_date()
+            if ethica:
+                out_fname = out_fname + '_ethica' + '.csv'
+            else:
+                out_fname = out_fname + '_sd' + '.csv'
+
             if '-o' not in argv and isfile(out_fname):
                 print("Participant has already been processed.\n")
                 continue
 
-        print("Participant " + str(p.interact_id) + ".")
-        if city == 'victoria' and wave == 1 and p.interact_id not in pairs.index:
-            print("No SD data found for participant.\n")
-            continue
         if p.interact_id in processed:
             print("Participant has already been processed.\n")
             continue
 
         # Get the start and end times for the participant so we can exclude data that is not a part of the study
-        if start_end[start_end.interact_id == p.interact_id].empty:
-            start_date = '2000-01-01 00:00:00-00:00'
-            end_date = '2100-01-01 00:00:00-00:00'
-        else:
-            start_date = pd.Timestamp(start_end[start_end.interact_id == p.interact_id]['start'].item()).tz_localize(
-                city_timezones[city])
-            end_date = pd.Timestamp(start_end[start_end.interact_id == p.interact_id]['end'].item()).tz_localize(
-                city_timezones[city]) + timedelta(days=1)
+        try:
+            if ethica:
+                querystr = """
+                select start_date, end_date from portal_dev.ethica_assignments where interact_id = %s;
+                """ % (p.interact_id,)
+            else:
+                querystr = """
+                select started_wearing, stopped_wearing from portal_dev.sensedoc_assignments where interact_id = %s;
+                """ % (p.interact_id,)
+            start_date = pd.Timestamp(psql_get_data(querystr).started_wearing[0]).tz_localize(city_timezones[city])
+            end_date = pd.Timestamp(psql_get_data(querystr).stopped_wearing[0]).tz_localize(city_timezones[city]) + timedelta(days=1)
+        except:
+            start_date = '2015-01-01 00:00:00-00:00'
+            end_date = '2030-01-01 00:00:00-00:00'
 
         # Gather health data. Constant for participant's entire entry
+        # NOTE: This section the section most likely to require adjustments between cities and waves due to the
+        # different survey structures. Make note of these differences and edit the script accordingly.
         health_data = {'interact_id': p.interact_id,
                        'age': -1,
                        'gender': [],
                        'city_id': city,
                        'wave_id': wave,
                        'income': '',
-                       'education': ''}
-        if city == 'victoria' and wave == 1:
-            querystr = """
-            select * from survey.vic_data where pid = %s;
-            """ % pairs.loc[p.interact_id].treksoft_id_lut
+                       'education': '',
+                       'ethnicity': ''}
+        if wave == 1:
+            if city == 'saskatoon':
+                querystr = """
+                select income, education, gender, group_id_skt from lut.health_1skt_main where interact_id::varchar = %s::varchar;
+                """ % (str(p.interact_id), )
+            elif city == 'victoria':
+                querystr = """
+                select income, group_id from lut.health_1%s_main where interact_id::varchar = %s::varchar;
+                """ % (city_letters[city], str(p.interact_id), )
+
+            else:
+                querystr = """
+                select income, education, gender, group_id_%s from lut.health_1%s_main where interact_id::varchar = %s::varchar;
+                """ % (city_letters[city], city_letters[city], str(p.interact_id), )
+            survey_data = psql_get_data(querystr)
+            if survey_data.empty:
+                continue
+            survey_data = survey_data.iloc[0]
+            health_data['income'] = answers['income'][survey_data.income]
+            if city == 'victoria':
+                trek_id = linkage[linkage.interact_id == p.interact_id].treksoft_id.tolist()[0]
+                gen_query = """select data from survey.vic_data where pid = %s""" % (int(trek_id), )
+                for d in list(psql_get_data(gen_query).data):
+                    if 'Eligibility_Q2' in d:
+                        gk = ['', 'Male', 'Female', 'Trans', 'Other']
+                        health_data['gender'] = ''
+                        for g in d['Eligibility_Q2']:
+                            health_data['gender'] = health_data['gender'] + gk[g] + ', '
+                        health_data['gender'] = health_data['gender'][:-2]
+                    if 'Eligibility_Q1_C3' in d:
+                        health_data['age'] = 2017 - d['Eligibility_Q1_C3']
+            else:
+                health_data['education'] = answers['education'][survey_data.education]
+                health_data['gender'] = gender_key[survey_data.gender]
+            if city == 'victoria':
+                eth = list(survey_data['group_id'])
+            else:
+                eth = list(survey_data['group_id_' + city_letters[city]])
+            for i in eth:
+                if i.isdigit():
+                    health_data['ethnicity'] = health_data['ethnicity'] + answers['ethnicity'][int(i)] + ', '
+            health_data['ethnicity'] = health_data['ethnicity'][:-2]
+            #if type(s['gender']) is int:
+            #    health_data['gender'] = gender_key[s['gender']]
+            #else:
+            #    try:
+            #        health_data['gender'] = str([gender_key[x] for x in s['gender']])[1:-1]
+            #    except:
+            #        health_data['gender'] = []
+            if city == 'saskatoon':
+                querystr = """
+                select added, birthdate from survey.skt_eligibility where participant_id = %s;
+                """ % (str(p.interact_id),)
+                age_data = psql_get_data(querystr)
+                try:
+                    health_data['age'] = age_data.added[0].year - age_data.birthdate[0].year
+                except:
+                    health_data['age'] = -1
+
+            #querystr2 = """
+            #select * from survey.health_%s%s_main where treksoft_id = %s;
+            #""" % (str(wave), city_letters[city], trek_id)
+            #health_survey = psql_get_data(querystr2)
+            #querystr3 = """
+            #select session_created_at from survey.%s_data where uid = %s;
+            #""" % (city_letters[city], trek_id)
+            #try:
+            #    survey_year = psql_get_data(querystr3).session_created_at[0].year
+            #    health_data['age'] = survey_year - survey_data.birth_date[0].year
+            #except:
+            #    health_data['age'] = -1
+
         else:
             querystr = """
-            select * from survey.%s where uid = %s;
-            """ % (city_surveys[city], p.interact_id)
-        survey_data = pd.read_sql(querystr, connection)
-        if not survey_data.empty:
-            survey_year = survey_data.updated_at[0].year
-            health_data['age'] = survey_year - int(get_survey_answers(city, wave, 'birth_year', survey_data))
-            gender_raw = get_survey_answers(city, wave, 'gender', survey_data)
-            gender_str = []
-            for g in gender_raw:
-                gender_str.append(gender_key[city][g])
-            health_data['gender'] = gender_str
-            health_data['education'] = get_survey_answers(city, wave, 'education', survey_data)
-            health_data['income'] = get_survey_answers(city, wave, 'income', survey_data)
-            print("Health data collected.")
+            select * from survey%s.%s_data where iid = %s
+            """ % (str(wave), city_letters[city], str(p.interact_id))
+            survey_data = psql_get_data(querystr)
+            if not survey_data.empty:
+                for s in survey_data.itertuples():
+                    if s.data is None:
+                        continue
+                    responses = dict(s.data)
+                    if 'gender' in responses:
+                        health_data['gender'] = gender_key[responses['gender']]
+                    if 'income' in responses:
+                        health_data['income'] = answers['income'][responses['income']]
+                    if 'birth_date' in responses:
+                        health_data['age'] = int(str(s.date_completed)[0:4]) - int(str(responses['birth_date'])[0:4])
+                    else:
+                        try:
+                            querystr2 = """
+                            select age from level_1second.table_of_power where interact_id = %s limit 1
+                            """ % (p.interact_id,)
+                            health_data['age'] = int(psql_get_data(querystr2).age[0])
+                        except:
+                            health_data['age'] = -1
+                    if 'education' in responses:
+                        health_data['education'] = answers['education'][responses['education']]
 
         # Get SenseDoc accelerometer data
-        if city == 'victoria' and wave == 1:
+        if ethica:
+            # TODO: Replace with appropriate table when available
             querystr = """
-            select utc_date, x_acc_sd, y_acc_sd, z_acc_sd from sd_accel_raw_test 
-            where (interact_id = %s) and (utc_date >= '%s') and (utc_date < '%s');
-            """ % (pairs.loc[p.interact_id].interact_id_sdid, start_date, end_date)
+            select record_time, x, y, z from level_0.%s_w1_eth_xls_delconflrec
+            where iid = %s and record_time >= '%s' and record_time < '%s';
+            """ % (city_letters[city], p.interact_id, start_date, end_date)
         else:
             querystr = """
-            select utc_date, x_acc_sd, y_acc_sd, z_acc_sd from sd_accel_raw_test 
-            where (interact_id = %s) and (utc_date >= '%s') and (utc_date < '%s');
+            select ts, x, y, z from level_0.sd_accel 
+            where (iid = %s) and (ts > '%s') and (ts < '%s');
             """ % (p.interact_id, start_date, end_date)
         print("Collecting accel data.")
-
-        # Pull from cache if it exists, otherwise create the cache for the participant
-        if isfile("cache/" + str(p.interact_id) + "_accel.csv") and '-r' not in argv:
-            accel_data = pd.read_csv("cache/" + str(p.interact_id) + "_accel.csv")
-        else:
-            accel_data = pd.read_sql(querystr, connection)
-            accel_data.columns = ['utcdate', 'x', 'y', 'z']
-            # accel_data.to_csv("cache/" + str(p.interact_id) + "_accel.csv")
+        accel_data = psql_get_data(querystr).drop_duplicates()
+        accel_data.columns = ['utcdate', 'x', 'y', 'z']
         counts = pd.DataFrame(index=['utcdate'], columns=['summary_count'])
         print("Processing accel data.")
         if not accel_data.empty:
-            accel_data['utcdate'] = pd.to_datetime(accel_data.utcdate)
+            accel_data['utcdate'] = pd.to_datetime(accel_data.utcdate, utc=True)
+            if city == 'victoria':
+                accel_data = accel_data.set_index('utcdate').resample('20L', how='median').reset_index().dropna(subset=['x'])
             # Compute activity counts
             counts = get_activity_counts(accel_data)
             counts.set_index(['utcdate'], inplace=True)
@@ -240,41 +342,50 @@ if __name__ == "__main__":
             accel_data = accel_data.resample('s').mean().dropna()
             accel_data.index.round('s')
             accel_data.drop(['x', 'y', 'z'], axis=1, inplace=True)
+        else:
+            print("No accel data found.")
+            aborted.append(p.interact_id)
+            continue
         print("Accel processing complete.")
 
-        # Get SenseDoc GPS data
-        if city == 'victoria' and wave == 1:
+        # Get GPS data
+        if ethica:
+            # TODO: Replace with appropriate table when available
             querystr = """
-            select utc_date, x_wgs_sd, y_wgs_sd, speed_sd, alt_sd from sd_gps_raw_test 
-            where interact_id = %s and utc_date >= '%s' and utc_date < '%s';
-            """ % (pairs.loc[p.interact_id].interact_id_sdid, start_date, end_date)
+            select record_time, lat, lon from level_0.%s_w1_eth_gps_delconflrec
+            where iid = %s and record_time >= '%s' and record_time < '%s';
+            """ % (city_letters[city], p.interact_id, start_date, end_date)
         else:
             querystr = """
-            select utc_date, x_wgs_sd, y_wgs_sd, speed_sd, alt_sd from sd_gps_raw_test 
-            where interact_id = %s and utc_date >= '%s' and utc_date < '%s';
+            select ts, lat, lon from level_0.sd_gps 
+            where iid = %s and ts > '%s' and ts < '%s';
             """ % (p.interact_id, start_date, end_date)
         print("Collecting gps data.")
-
-        # Pull from cache if it exists, otherwise create the cache for the participant
-        if isfile("cache/" + str(p.interact_id) + "_gps.csv") and '-r' not in argv:
-            gps_data = pd.read_csv("cache/" + str(p.interact_id) + "_gps.csv")
-        else:
-            gps_data = pd.read_sql(querystr, connection)
-            gps_data.columns = ['utcdate', 'lon', 'lat', 'speed', 'alt']
-            # gps_data.to_csv("cache/" + str(p.interact_id) + "_gps.csv")
+        gps_data = psql_get_data(querystr).drop_duplicates()
+        gps_data.columns = ['utcdate', 'lat', 'lon']
         print("Processing gps data.")
         if not gps_data.empty:
-            gps_data['utcdate'] = pd.to_datetime(gps_data.utcdate)
+            gps_data['utcdate'] = pd.to_datetime(gps_data.utcdate, utc=True)
             gps_data.set_index(['utcdate'], inplace=True, drop=True)
             # Get average gps data for each second
-            gps_data = gps_data.resample('1S').mean().dropna(subset=['lat', 'lon'])
-            gps_data.index.round('1S')
-            # Convert coordinates to UTM
-            proj = Proj("+proj=utm +zone=" + city_zones[city] + ", +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
-            gps_data['northing'], gps_data['easting'] = proj(gps_data['lon'].values, gps_data['lat'].values)
-            gps_data['zone'] = city_zones[city]
-            # Generate column which tells when the participant was within the city limits
-            gps_data['in_city'] = in_city(gps_data, sf)
+            try:
+                gps_data = gps_data.resample('1S').mean()
+                gps_data = gps_data.dropna(subset=['lat', 'lon'])
+                gps_data.index.round('1S')
+                # Convert coordinates to UTM
+                proj = Proj("+proj=utm +zone=" + city_zones[city] + ", +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+                gps_data['northing'], gps_data['easting'] = proj(gps_data['lon'].values, gps_data['lat'].values)
+                gps_data['zone'] = city_zones[city]
+                # Generate column which tells when the participant was within the city limits
+                gps_data['in_city'] = in_city(gps_data, sf, city)
+            except:
+                print("ABORTED\n")
+                aborted.append(p.interact_id)
+                continue
+        else:
+            print("No GPS data found.")
+            gps_data = pd.DataFrame()
+
         print("GPS processing complete.")
 
         # Combine each piece of processed data into one table
@@ -289,6 +400,7 @@ if __name__ == "__main__":
         table['gender'] = str(health_data['gender'])
         table['income'] = health_data['income']
         table['education'] = health_data['education']
+        table['ethnicity'] = health_data['ethnicity']
         table['city_id'] = health_data['city_id']
         table['wave_id'] = health_data['wave_id']
         table = table.reset_index().set_index(['interact_id', 'utcdate'])
@@ -305,6 +417,6 @@ if __name__ == "__main__":
             table.to_csv(out_fname, header=False, mode='a')
 
     print("Table constructed.")
-    cursor.close()
-    connection.close()
+    print("Aborted:")
+    print(aborted)
     exit()
