@@ -55,7 +55,9 @@ def marking(counts_df, frame, stream_frame=None, allowance_frame=2):
         end_pos = np.delete(end_pos, bad_index)
 
     gaplen = len(end_pos)
-    if gaplen > 0:
+    if len(start_pos) < 2:
+        wearing = 1
+    elif gaplen > 0:
         end_gap = np.delete(end_pos, gaplen - 1)
         start_gap = np.delete(start_pos, 0)
         gap = np.where(start_gap - end_gap > frame)[0]

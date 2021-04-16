@@ -29,6 +29,8 @@ from sys import argv
 from wear_time import wear_marking
 from datetime import timedelta
 from survey_parse import answers
+from interact_tools import city_letters
+import ast
 
 city_surveys = {
     'victoria': 'vic_data',
@@ -37,12 +39,11 @@ city_surveys = {
     'saskatoon': 'skt_data'
 }
 
-city_letters = {
-    'victoria': 'vic',
-    'vancouver': 'van',
-    'montreal': 'mtl',
-    'saskatoon': 'ssk'
-}
+city_zones = {
+    'victoria': '10U',
+    'vancouver': '10U',
+    'montreal': '18T',
+    'saskatoon': '13U'}
 
 city_timezones = {
     'victoria': 'Canada/Pacific',
@@ -58,14 +59,8 @@ gender_key = {
     4:  "TransgenderFemale",
     5:  "Genderqueer/non-conforming",
     6:  "Other",
-    77: "Prefer not to answer"
-}
-
-city_zones = {
-    'victoria': '10U',
-    'vancouver': '10U',
-    'montreal': '18T',
-    'saskatoon': '13U'
+    77: "Prefer not to answer",
+    99: "Prefer not to answer"
 }
 
 
@@ -218,43 +213,75 @@ if __name__ == "__main__":
                 querystr = """
                 select income, education, gender, group_id_skt from lut.health_1skt_main where interact_id::varchar = %s::varchar;
                 """ % (str(p.interact_id), )
-            elif city == 'victoria':
+            elif city == 'montreal':
                 querystr = """
-                select income, group_id from lut.health_1%s_main where interact_id::varchar = %s::varchar;
+                select age, income, education, group_id_mtl, gender from lut.health_1%s_main where interact_id::varchar = %s::varchar;
                 """ % (city_letters[city], str(p.interact_id), )
-
             else:
                 querystr = """
-                select income, education, gender, group_id_%s from lut.health_1%s_main where interact_id::varchar = %s::varchar;
-                """ % (city_letters[city], city_letters[city], str(p.interact_id), )
+                select * from lut.health_1%s_main where interact_id::varchar = %s::varchar;
+                """ % (city_letters[city], str(p.interact_id), )
             survey_data = psql_get_data(querystr)
-            if survey_data.empty:
-                continue
-            survey_data = survey_data.iloc[0]
-            health_data['income'] = answers['income'][survey_data.income]
-            if city == 'victoria':
-                trek_id = linkage[linkage.interact_id == p.interact_id].treksoft_id.tolist()[0]
-                gen_query = """select data from survey.vic_data where pid = %s""" % (int(trek_id), )
-                for d in list(psql_get_data(gen_query).data):
-                    if 'Eligibility_Q2' in d:
-                        gk = ['', 'Male', 'Female', 'Trans', 'Other']
-                        health_data['gender'] = ''
-                        for g in d['Eligibility_Q2']:
-                            health_data['gender'] = health_data['gender'] + gk[g] + ', '
-                        health_data['gender'] = health_data['gender'][:-2]
-                    if 'Eligibility_Q1_C3' in d:
-                        health_data['age'] = 2017 - d['Eligibility_Q1_C3']
-            else:
-                health_data['education'] = answers['education'][survey_data.education]
-                health_data['gender'] = gender_key[survey_data.gender]
-            if city == 'victoria':
-                eth = list(survey_data['group_id'])
-            else:
-                eth = list(survey_data['group_id_' + city_letters[city]])
-            for i in eth:
-                if i.isdigit():
-                    health_data['ethnicity'] = health_data['ethnicity'] + answers['ethnicity'][int(i)] + ', '
-            health_data['ethnicity'] = health_data['ethnicity'][:-2]
+            #if survey_data.empty:
+            #    continue
+            #survey_data = survey_data.iloc[0]
+            #health_data['income'] = answers['income'][survey_data.income]
+            #if city == 'victoria':
+            #    trek_id = linkage[linkage.interact_id == p.interact_id].treksoft_id.tolist()[0]
+            #    gen_query = """select data from survey.vic_data where pid = %s""" % (int(trek_id), )
+            #    for d in list(psql_get_data(gen_query).data):
+            #        if 'Eligibility_Q2' in d:
+            #            gk = ['', 'Male', 'Female', 'Trans', 'Other']
+            #            health_data['gender'] = ''
+            #            for g in d['Eligibility_Q2']:
+            #                health_data['gender'] = health_data['gender'] + gk[g] + ', '
+            #            health_data['gender'] = health_data['gender'][:-2]
+            #        if 'Eligibility_Q1_C3' in d:
+            #            health_data['age'] = 2017 - d['Eligibility_Q1_C3']
+            #else:
+            #    health_data['education'] = answers['education'][survey_data.education]
+            #    health_data['gender'] = gender_key[survey_data.gender]
+            #if city == 'victoria' or city == 'vancouver':
+            #    eth = list(survey_data['group_id'])
+            #else:
+            #    eth = list(survey_data['group_id_' + city_letters[city]])
+            if not survey_data.empty:
+                for response in survey_data.itertuples():
+                    responses = response._asdict()
+                    #if s.data is None:
+                    #    continue
+                    if 'gender' in responses:
+                        health_data['gender'] = gender_key[responses['gender']]
+                    if 'income' in responses:
+                        health_data['income'] = answers['income'][responses['income']]
+                    if 'birth_date' in responses:
+                        health_data['age'] = int(str(s.date_completed)[0:4]) - int(str(responses['birth_date'])[0:4])
+                    elif 'age' in responses:
+                        health_data['age'] = responses['age']
+                    else:
+                        try:
+                            querystr2 = """
+                            select age from level_1second.table_of_power where interact_id = %s limit 1
+                            """ % (p.interact_id,)
+                            health_data['age'] = int(psql_get_data(querystr2).age[0])
+                        except:
+                            health_data['age'] = -1
+                    if 'education' in responses:
+                        health_data['education'] = answers['education'][responses['education']]
+                    gid = ''
+                    if 'group_id' in responses:
+                        gid = 'group_id'
+                    elif 'group_id_' + city_letters[city] in responses:
+                        gid = 'group_id_' + city_letters[city]
+                    if gid != '':
+                        for ethn in ast.literal_eval(responses[gid]):
+                            health_data['ethnicity'] = health_data['ethnicity'] + ', ' + answers['ethnicity'][city][wave][ethn]
+                        if len(health_data['ethnicity']) > 2:
+                            health_data['ethnicity'] = health_data['ethnicity'][2:]
+            #for i in eth:
+            #    if i.isdigit():
+            #        health_data['ethnicity'] = health_data['ethnicity'] + answers['ethnicity'][int(i)] + ', '
+            #health_data['ethnicity'] = health_data['ethnicity'][:-2]
             #if type(s['gender']) is int:
             #    health_data['gender'] = gender_key[s['gender']]
             #else:
@@ -311,37 +338,35 @@ if __name__ == "__main__":
                             health_data['age'] = -1
                     if 'education' in responses:
                         health_data['education'] = answers['education'][responses['education']]
+                    if 'group_id' in responses:
+                        for ethn in responses['group_id']:
+                            health_data['ethnicity'] = health_data['ethnicity'] + ', ' + answers['ethnicity'][city][wave][ethn]
+                        if len(health_data['ethnicity']) > 2:
+                            health_data['ethnicity'] = health_data['ethnicity'][2:]
 
         # Get SenseDoc accelerometer data
         if ethica:
             # TODO: Replace with appropriate table when available
             querystr = """
-            select record_time, x, y, z from level_0.%s_w1_eth_xls_delconflrec
+            select record_time, x, y, z from level_0.%s_w%s_eth_xls_delconflrec
             where iid = %s and record_time >= '%s' and record_time < '%s';
-            """ % (city_letters[city], p.interact_id, start_date, end_date)
+            """ % (city_letters[city], str(wave), p.interact_id, start_date, end_date)
         else:
             querystr = """
             select ts, x, y, z from level_0.sd_accel 
             where (iid = %s) and (ts > '%s') and (ts < '%s');
             """ % (p.interact_id, start_date, end_date)
         print("Collecting accel data.")
-        accel_data = psql_get_data(querystr).drop_duplicates()
+        accel_data = psql_get_data(querystr).drop_duplicates(subset=['record_time'], keep=False)
         accel_data.columns = ['utcdate', 'x', 'y', 'z']
         counts = pd.DataFrame(index=['utcdate'], columns=['summary_count'])
         print("Processing accel data.")
         if not accel_data.empty:
             accel_data['utcdate'] = pd.to_datetime(accel_data.utcdate, utc=True)
-            if city == 'victoria':
-                accel_data = accel_data.set_index('utcdate').resample('20L', how='median').reset_index().dropna(subset=['x'])
             # Compute activity counts
             counts = get_activity_counts(accel_data)
             counts.set_index(['utcdate'], inplace=True)
             counts = wear_marking(counts, epoch='1S')
-            accel_data.set_index(['utcdate'], inplace=True, drop=True)
-            # Get average accel data for each second
-            accel_data = accel_data.resample('s').mean().dropna()
-            accel_data.index.round('s')
-            accel_data.drop(['x', 'y', 'z'], axis=1, inplace=True)
         else:
             print("No accel data found.")
             aborted.append(p.interact_id)
@@ -352,9 +377,9 @@ if __name__ == "__main__":
         if ethica:
             # TODO: Replace with appropriate table when available
             querystr = """
-            select record_time, lat, lon from level_0.%s_w1_eth_gps_delconflrec
+            select record_time, lat, lon from level_0.%s_w%s_eth_gps_delconflrec
             where iid = %s and record_time >= '%s' and record_time < '%s';
-            """ % (city_letters[city], p.interact_id, start_date, end_date)
+            """ % (city_letters[city], str(wave), p.interact_id, start_date, end_date)
         else:
             querystr = """
             select ts, lat, lon from level_0.sd_gps 
@@ -369,12 +394,12 @@ if __name__ == "__main__":
             gps_data.set_index(['utcdate'], inplace=True, drop=True)
             # Get average gps data for each second
             try:
-                gps_data = gps_data.resample('1S').mean()
+                gps_data = gps_data.resample('1S').median()
                 gps_data = gps_data.dropna(subset=['lat', 'lon'])
                 gps_data.index.round('1S')
                 # Convert coordinates to UTM
                 proj = Proj("+proj=utm +zone=" + city_zones[city] + ", +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
-                gps_data['northing'], gps_data['easting'] = proj(gps_data['lon'].values, gps_data['lat'].values)
+                gps_data['easting'], gps_data['northing'] = proj(gps_data['lon'].values, gps_data['lat'].values)
                 gps_data['zone'] = city_zones[city]
                 # Generate column which tells when the participant was within the city limits
                 gps_data['in_city'] = in_city(gps_data, sf, city)
@@ -390,10 +415,9 @@ if __name__ == "__main__":
 
         # Combine each piece of processed data into one table
         print("Merging accel and gps data.")
-        table = accel_data.join(gps_data).join(counts)
+        table = gps_data.join(counts)
         table.dropna(subset=['summary_count'], inplace=True)
-        table[['x_count', 'y_count', 'z_count', 'wearing', 'in_city']] = \
-            table[['x_count', 'y_count', 'z_count', 'wearing', 'in_city']].astype('Int64')
+        table[['x_count', 'y_count', 'z_count', 'wearing', 'in_city']] = table[['x_count', 'y_count', 'z_count', 'wearing', 'in_city']].astype('Int64')
         print("Merging health data.")
         table['interact_id'] = health_data['interact_id']
         table['age'] = health_data['age']

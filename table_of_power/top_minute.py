@@ -129,12 +129,10 @@ if __name__ == "__main__":
         static_data = p_data.resample(time_quant + time_type).first().dropna(subset=['interact_id'])
         sum_data = p_data.resample(time_quant + time_type).sum().dropna(subset=['interact_id'])
         static_data[['interact_id', 'age', 'wave_id']] = static_data[['interact_id', 'age', 'wave_id']].astype(int)
-        print(p_data.columns)
         # aggregate the existing data depending on its data type
         m_cols = ['lon', 'lat', 'northing', 'easting']
         s_cols = ['x_count', 'y_count', 'z_count', 'summary_count']
         f_cols = ['interact_id', 'zone', 'age', 'gender', 'income', 'education', 'ethnicity', 'city_id', 'wave_id']
-        f_cols = ['interact_id', 'zone', 'age', 'gender', 'income', 'ethnicity', 'city_id', 'wave_id']
         minute_data = p_data.drop(['in_city', 'wearing'], axis=1)[m_cols].resample(time_quant + time_type).median()
         minute_data[f_cols] = p_data.drop(['in_city', 'wearing'], axis=1)[f_cols].resample(time_quant + time_type).first()
         minute_data[s_cols] = p_data.drop(['in_city', 'wearing'], axis=1)[s_cols].resample(time_quant + time_type).sum()
@@ -163,9 +161,9 @@ if __name__ == "__main__":
         minute_data['wearing'] = wear_marking(p_data[['summary_count']], epoch=time_quant + time_type)['wearing']
 
         minute_data['activity_levels'] = "vigorous"
-        minute_data.loc[minute_data.summary_count < vigorous_thresh, 'activity_levels'] = "moderate"
-        minute_data.loc[minute_data.summary_count < moderate_thresh, 'activity_levels'] = "light"
-        minute_data.loc[minute_data.summary_count < light_thresh, 'activity_levels'] = "sedentary"
+        minute_data.loc[minute_data.x_count < vigorous_thresh, 'activity_levels'] = "moderate"
+        minute_data.loc[minute_data.x_count < moderate_thresh, 'activity_levels'] = "light"
+        minute_data.loc[minute_data.x_count < light_thresh, 'activity_levels'] = "sedentary"
         minute_data = minute_data.reset_index()[["interact_id", "utcdate", "lon", "lat", "northing",
                                                  "easting", "zone", "in_city", "x_count", "y_count", "z_count",
                                                  "summary_count", "wearing", "activity_levels", "age", "gender",

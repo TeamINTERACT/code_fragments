@@ -28,10 +28,11 @@ def get_activity_counts(data_df):
     :param accel_df: A pandas dataframe containing the x, y, and z accelerometer data with a readings frequency of 50 Hz
     :return:
     """
-    # accel_df = pd.DataFrame()
-    # for col in data_df:
-    #     accel_df[col] = resampy.resample(np.array(data_df[col]), 50, 30)
-    accel_df = data_df.drop_duplicates(subset=['utcdate'])
+
+    # Quick data cleaning: remove any duplicated timestamps and resample to 50 Hz
+    accel_df = data_df.drop_duplicates(subset=['utcdate'], keep=False)
+    accel_df = accel_df.set_index('utcdate').resample('20L').median().reset_index().dropna(subset=['x', 'y', 'z'])
+
     x_activity_count = list(counts(accel_df.x, 50))
     y_activity_count = list(counts(accel_df.y, 50))
     z_activity_count = list(counts(accel_df.z, 50))

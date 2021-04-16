@@ -44,6 +44,13 @@ city_names = {
     5: "unknown"
 }
 
+city_letters = {
+    'victoria': 'vic',
+    'vancouver': 'van',
+    'montreal': 'mtl',
+    'saskatoon': 'ssk'
+}
+
 city_sf = {
     'montreal': 0,
     'saskatoon': 1,
@@ -78,9 +85,6 @@ def get_id_list(city, wave, minbound=0, maxbound=10 ** 10, legacy=False):
         kwargs = get_connection_kwargs()
     connection = psy.connect(**kwargs)
     cursor = connection.cursor()
-    # query_str = """select interact_id, treksoft_id_uid, treksoft_id_pid
-    #                from master_id
-    #                where interact_id = 101549282"""
     query_str = """select interact_id, treksoft_id_uid, treksoft_id_pid
                    from master_id
                    where interact_id > %s and interact_id < %s""" % (max(id_range_low, minbound),
@@ -110,15 +114,18 @@ def iid_list(city, wave, minbound=0, maxbound=10 ** 10, ethica=False):
     connection = psy.connect(**kwargs)
     cursor = connection.cursor()
     if ethica:
-        ids = pd.DataFrame()
-        for study in ethica_studies[city][wave]:
-            query_str = """select distinct interact_id from portal_dev.ethica_assignments where interact_id > %s and interact_id < %s and study_id = %s
-            """ % (minbound, maxbound, study)
-            ids = ids.append(pd.read_sql(query_str, connection))
+        query_str = """
+                    select distinct iid as interact_id from level_0.%s_w%s_eth_gps_delconflrec
+                    """ % (city_letters[city], str(wave))
+        # ids = pd.DataFrame()
+        # for study in ethica_studies[city][wave]:
+        #     query_str = """select distinct interact_id from portal_dev.ethica_assignments where interact_id > %s and interact_id < %s and study_id = %s
+        #     """ % (minbound, maxbound, study)
+        #     ids = ids.append(pd.read_sql(query_str, connection))
     else:
         query_str = """select distinct interact_id from portal_dev.sensedoc_assignments where interact_id > %s and interact_id < %s and city_id = %s and wave_id = %s
         """ % (minbound, maxbound, cities[city], wave)
-        ids = pd.read_sql(query_str, connection)
+    ids = pd.read_sql(query_str, connection)
     cursor.close()
     connection.close()
     return ids

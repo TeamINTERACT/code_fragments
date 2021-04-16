@@ -29,30 +29,31 @@ if __name__ == "__main__":
     if not isdir(output_dir):
         print("Could not locate directory: " + output_dir)
     if '-i' in argv:
-        participants = it.iid_list(city, wave).interact_id.tolist()
+        participants = it.iid_list(city, wave, ethica='-e' in argv).interact_id.tolist()
         ranges = []
         for p in participants:
-            out_fname = output_dir + '/' + str(p) + '_table_of_power_' + it.get_last_commit_date() + '.csv'        
-            if '-o' not in argv and isfile(out_fname):                                                    
+            # out_fname = output_dir + '/' + str(p) + '_table_of_power_' + it.get_last_commit_date() + '.csv' 
+            out_fname = output_dir + '/' + str(p) + '_table_of_power_' + it.get_last_commit_date()
+            if '-e' in argv:
+                out_fname = out_fname + '_ethica' + '.csv'
+            else:
+                out_fname = out_fname + '_sd' + '.csv'
+            if '-o' not in argv and isfile(out_fname):
                 continue
             ranges.append((int(p), int(p) + 1))
     else:
-        step = 100000
+        step = 25000
         lowval = it.cities[city] * 100000000 + 1000000
         highval = lowval + int(wave) * 1000000
         ranges = zip(range(lowval, highval, step), range(lowval + step, highval + step, step))
-
     if len(argv) < 4:
         print("Usage: python top_generation.py SITE_NAME WAVE_NUMBER OUTPUT_DIR [OPTIONS]")
         exit()
     
     aborted = []
+    print(ranges)
     for p, p2 in ranges:
         print((p, p2))
-        out_fname = output_dir + '/' + str(p) + '_table_of_power_' + it.get_last_commit_date() + '.csv'
-        if '-o' not in argv and isfile(out_fname):
-            print("Participant has already been processed.\n")
-            continue
         retry = 0
         while retry < 4:
             try:
@@ -60,12 +61,14 @@ if __name__ == "__main__":
                 f.write("#!/bin/bash\n")
                 f.write("#SBATCH --account=def-dfuller\n")
                 if '-i' in argv:
-                    f.write("#SBATCH --time=04:00:00\n")
+                    f.write("#SBATCH --time=01:30:00\n")
+                elif city == 'montreal':
+                    f.write('#SBATCH --time=48:00:00\n')
                 elif '-e' in argv:
                     f.write("#SBATCH --time=10:00:00\n")
                 else:
                     f.write("#SBATCH --time=48:00:00\n")
-                f.write("#SBATCH --mem=16G\n")
+                f.write("#SBATCH --mem=32G\n")
                 f.write("export SLURM_ACCOUNT=def-dfuller\n")
                 f.write("export SBATCH_ACCOUNT=$SLURM_ACCOUNT\n")
                 f.write("export SALLOC_ACCOUNT=$SLURM_ACCOUNT\n")
@@ -79,8 +82,8 @@ if __name__ == "__main__":
                 f.close()
                 while subprocess.run(["sbatch", "schedule_job_" + str(p) + ".sh"]).returncode:
                     print('Retrying')
-                    time.sleep(5)
-                time.sleep(5)
+                    time.sleep(10)
+                time.sleep(10)
                 os.remove("schedule_job_" + str(p) + ".sh")
                 retry = 4
             except:
